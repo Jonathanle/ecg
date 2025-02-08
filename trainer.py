@@ -2,33 +2,49 @@
 import pandas as pd
 from pathlib import Path
 
-def preprocess_data(input_dir = "./data/InterpolatedQRS"):
+def preprocess_data_file(filepath):
     """
-    Given unknown / stochastic environment, process all of the patient 
-    files to get all of the relevant data --> ensure that this is completely processed
+    Process 1 single xlsx file to retrieve the pd dataframe
 
+    Params: 
+        filepath - path to xlsx file for interpreting
+
+
+    returns: 
+        pandas df object (TODO Modify thisi file to change to a numpy matrix)
+
+    Directory Format: 
+        
+    dir - 1 xlsx file
     
-    Format of the directory - 
-    All patient files are in input_dir
-    each patient is associated with a xlsx file
+    Patient File Requirements:
+        MUST have 12 columns corresponding to leads 0-12
+        MUST have the standardized 250 time samples
 
 
-    format - patient folder / 
-    (PATIENT, TIME, LEAD, Voltage)
+    this will process 1 patient file only* further preprocessing
+    of multiple will be done later
 
-    # TODO: Figure out how to test this code so that I obtain 100% certainty to build models.
     """
-    # List all file paths ending in xlsx
 
+    NUM_TIME_STEPS = 250 
+    NUM_LEADS = 12
 
-    filename = "R01_pre_anon_interp.xlsx"
-    # TODO: Import the dataset as a pandaqs 
+    df = pd.read_excel(filepath, header = None)
 
-    df = pd.read_excel(input_dir)
+    assert df.shape == (NUM_TIME_STEPS, NUM_LEADS) 
+
 
     return df
 
 
+def preprocess_directory(input_dir = "./data/InterpolatedQRS/"):
+    """
+    Processes all the xlsx files and returns a group of the pytorch
+    datasets
+    """
+
+    return
 
 def main():
     # preprocess data --> Tensor 

@@ -4,7 +4,7 @@ import pandas as pd # This is the fileframe
 import tempfile
 from pathlib import Path
 
-from trainer import preprocess_data
+from trainer import * 
 
 import os
 
@@ -35,18 +35,35 @@ def sample_excel(tmppath = "./data/misc"):
 
     if file_path.exists(): 
         os.unlink(file_path) # as
+@pytest.fixture(scope='function')
+def patient_file(): 
+    return './data/InterpolatedQRS/R110_pre_anon_interp.xlsx'
+
+def test_excel_import_patient_set_right_dimensions(patient_file): 
 
 
+    data  = preprocess_data_file(patient_file)
+
+    assert data is not None
+
+    # How do I interface with teh pd with no columns?
+    
+    assert data.shape == (250, 12)
 
 def test_excel_import(sample_excel): 
 
     input_dir = sample_excel 
 
-    data  = preprocess_data(input_dir)
+    data  = preprocess_data_file(input_dir)
 
 
     assert data is not None
 
+
+    # How do I interface with teh pd dataframe?
+    
+    assert data['name'].size == 4
+    assert data['salary'][2] == 75000
 
 if __name__ == '__main__':
     sample_excel()
