@@ -1,6 +1,4 @@
-# TODO: Fully Implement baseline processing with all core functions
 
-import torch
 import pandas as pd
 from pathlib import Path
 
@@ -26,9 +24,9 @@ def preprocess_data(input_dir = "./data/InterpolatedQRS"):
     filename = "R01_pre_anon_interp.xlsx"
     # TODO: Import the dataset as a pandaqs 
 
-    df = pd.read_excel_data(input_dir)
+    df = pd.read_excel(input_dir)
 
-    return 
+    return df
 
 
 

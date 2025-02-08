@@ -4,10 +4,15 @@ import pandas as pd # This is the fileframe
 import tempfile
 from pathlib import Path
 
+from trainer import preprocess_data
+
+import os
+
 
 # Figure out how to create a testing script. For testing files
 
-def sample_excel(): 
+@pytest.fixture(scope='function')
+def sample_excel(tmppath = "./data/misc"): 
     """Create a temporary Excel file with sample data."""
     # Create sample data
     data = {
@@ -17,8 +22,30 @@ def sample_excel():
     }
     df = pd.DataFrame(data)
 
+    tmppath = Path(tmppath) 
+    
 
-    pd.to_excel("../data/misc", index = True) 
+    file_path = tmppath / Path("test_data.xlsx")
+    df.to_excel(file_path, index = True) 
+    
+    yield file_path
+
+
+    # Clean Up Environment
+
+    if file_path.exists(): 
+        os.unlink(file_path) # as
+
+
+
+def test_excel_import(sample_excel): 
+
+    input_dir = sample_excel 
+
+    data  = preprocess_data(input_dir)
+
+
+    assert data is not None
 
 
 if __name__ == '__main__':

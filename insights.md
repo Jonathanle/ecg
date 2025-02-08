@@ -24,7 +24,9 @@
 ### AArchitectural decisions? 
 - Bootstrap on this aand see what I need from empimrical experience
 ### Build environment (Given an dockerfile for running)
-docker build -t ecg_1 .
+```docker build -t ecg_1 . ```# For windows 
+
+# forgot about the -t next time consider every action important
 
 
 
