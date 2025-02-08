@@ -2,8 +2,7 @@
 # Test files
 
 ./pytest_cache/*
-./asdf
-
+data/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
