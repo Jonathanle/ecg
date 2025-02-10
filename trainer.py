@@ -50,7 +50,7 @@ def preprocess_data_file(filepath):
     return df
 
 
-def preprocess_directory(input_dir = "./data/InterpolatedQRS/", get_post = False):
+def preprocess_directory(input_dir="./data/InterpolatedQRS/", get_post=False):
 	"""
 	Processes all the xlsx files and returns a group of the pytorch
 	datasets
@@ -59,7 +59,8 @@ def preprocess_directory(input_dir = "./data/InterpolatedQRS/", get_post = False
 	input_dir (str) - directory containing all patient xlsx files
 	get_post (str) - retrieve the post xor the pre files
 	returns: 
-	np.array - np array of shape (num_patients, lead, time_sequence, voltage) *q1 
+		np.array - np array of shape (num_patients, lead, time_sequence, voltage) *q1 
+		filenames - string representation of the filenames
 	"""
 
 	# Convert input directory to Path object for easier handling
@@ -73,12 +74,12 @@ def preprocess_directory(input_dir = "./data/InterpolatedQRS/", get_post = False
 	# Process each file and collect the numpy arrays
 	patient_arrays = []
 	file_path_arrays = []
-	for file_path in patient_files:
+	for posix_file_path in patient_files:
 		# Assuming you have a function like process_single_file that returns
 		# an array of shape (lead, time_sequence, voltage)
-		patient_data = preprocess_data_file(file_path)  
+		patient_data = preprocess_data_file(posix_file_path)  
 		patient_arrays.append(patient_data)
-		file_path_arrays.append(str(file_path)) # changed this to get the str because file_path is a posix path NOT an str
+		file_path_arrays.append(str(posix_file_path)) # changed this to get the str because file_path is a posix path NOT an str
 
 		
 
@@ -92,8 +93,45 @@ def preprocess_directory(input_dir = "./data/InterpolatedQRS/", get_post = False
 
 	return combined_array, file_path_arrays
 
+def preprocess_patient_labels(input_dir="./data/PatientCohort_ECG.xlsx"): 
+	"""
+	Function that processes the patient labels, returning a dictionary mapping of the patients IDs to the outcome
 
 
+	Params: 
+		input_dir (str): directory to the cohort xlsx file
+
+
+	Returns (dict): Dictionary containing key mappings to the BinaryResponse
+	Variable
+	"""
+	
+	df = pd.read_excel("./data/PatientCohort_ECG.xlsx", header=0, index_col=0)
+
+	
+	dict_mapping = df['Binary Response'].to_dict() 
+
+	return dict_mapping
+
+
+def get_patient_id(filename): 
+	"""
+	Function to strip the filename and get the Patient ID, this function looks
+	for the first instance of an underscore and returns the representation of it
+	later on.
+	
+	Params: 
+		filename (str): filename of the format RXX_ ..... .xlsx
+	
+	Returns: 
+		patient id (str) - Patient id with the "RXX" 
+	"""
+	
+	for i in range(0, len(filename)): 
+		if filename[i] == "_": 
+			return filename[:i]
+	raise Exception("Error: no _ foudn in filename")
+	
 class ECGDataset(Dataset):
     def __init__(self, data_tensor, labels):
         """
@@ -102,8 +140,6 @@ class ECGDataset(Dataset):
             labels (list or torch.Tensor): Labels for the data
         """
         self.data = data_tensor
-        # Convert labels to tensor if they're not already
-	# TODO - extract the labels we have the patient dataset
 
         self.labels = torch.tensor(labels) if not torch.is_tensor(labels) else labels
         
@@ -124,22 +160,33 @@ class ECGDataset(Dataset):
         """
         return self.data[idx], self.labels[idx]
 def main():
-    # preprocess data --> Tensor  TODO: 
+	# preprocess data --> Tensor  TODO: 
+	ecg_tensors, filenames = preprocess_directory()
+	# filenames are weird --> remove to get only the patient information
+	labels = preprocess_patient_labels() # change to a dictionary
+
+	breakpoint()	
 
 
-    # TODO: create an process that later on
+	# added this in the main because of a dependency of adding filename to the tests (change in interface leads to bad tests)
+	for i in range(len(labels)): # warning: one of the labels is a NON patient id need to account for this TODO 
+		labels[i] = get_patient_id(labels[i])
+
+	# TODO: function to remove the information to put into the dataset	
+
+	# TODO: Combine the processes here into a Pytorch Dataset
 
 
 
 
-    # traansforms the data into an interface.
+	# traansforms the data into an interface.
 
 
 
-    # define model
-    # model train on data.  
-    
+	# define model
+	# model train on data.  
 
-    return
+
+	return
 if __name__ == '__main__':
     main()
