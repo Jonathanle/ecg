@@ -200,8 +200,11 @@ class ECGDataset(Dataset):
 		DF 
 		"""
 		
-		self.data, self.mapping, self.labels = self.create_data_interface(data_tensor, data_patient_ids, labels)
-	 
+		self.data, self.patient_id_idx_mapping, self.labels = self.create_data_interface(data_tensor, data_patient_ids, labels)
+	
+
+		self.idx_patient_mapping = {idx: patient_id for (patient_id, idx) in self.patient_id_idx_mapping.items()}
+
 		# Verify data and labels have matching first dimension
 		assert self.data.shape[0] == len(self.labels), \
 		    f"Data size {self.data.shape[0]} doesn't match labels size {len(self.labels)}"
@@ -209,7 +212,7 @@ class ECGDataset(Dataset):
 
 	def create_data_interface(self, data, data_patient_ids, labels): 
 		"""
-		Create pytorch datasets # TODO TEST, assume harder to refactor higher cost
+		Create pytorch datasets # TODO TEST + better document precisely interactions + interface assume harder to refactor higher cost
 		to fix from entropy + need to meet urgent deadlines
 
 		Assumes alll data for labels exists in training data	
@@ -217,10 +220,14 @@ class ECGDataset(Dataset):
 		Params: 
 		    labels
 		    data
+
+
+		feelings - it just feells loose and thata "something" might happen but it still gets the main job done.
 		"""
 
 		patient_training_index_mapping = {}
-
+		
+		# entropy from the data structure transformations df
 		num_data = len(labels.items())
 		new_tensor_shape = list(data.shape)
 		new_tensor_shape[0] = num_data
@@ -255,9 +262,11 @@ class ECGDataset(Dataset):
 		Args:
 		    idx (int): Index of the data sample
 		Returns:
-		    tuple: (data_sample, label)
+		    tuple: (data_sample, label, patient_id str)
 		"""
-		return self.data[idx], self.labels[idx]
+		
+		patient_id = self.idx_patient_mapping[idx]
+		return self.data[idx], self.labels[patient_id], patient_id
 def main():
 	ecg_tensors, filepaths = preprocess_directory()
 	
