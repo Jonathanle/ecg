@@ -3,3 +3,4 @@ pytest
 openpyxl
 torch
 torchvision
+scikit-learn

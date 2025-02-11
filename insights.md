@@ -35,6 +35,8 @@
 docker run -v ${PWD}:/app -it ecg_1 bash
 
 
+## Run assuming that you have the nvidia ctk installed on docker
+docker run -gpus all -v ${PWD}:/app -it ecg_1 bash
 
 ## Using pytest ini to specificy how to run python files 
 
@@ -59,3 +61,11 @@ When runnning the files tells the test files to run as if we are in the project 
 - 1 pomo - learn how to test functinos that are not files + best strategies for getting certianty with low cost. 
 - 1 pomo - realized about git errors need for testing --> start with git and realize that I need to learn about managing the broken 
 fllow from computer to learn + using the word document. 
+
+
+
+# 2-10 
+- compoleted the data structure
+
+# 2-11
+- TODO - LT complete the new testing fucntionn for the Dataset object

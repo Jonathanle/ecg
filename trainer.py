@@ -6,11 +6,19 @@ Refactored commends:
 """
 
 import torch
-from torch.utils.data import Dataset
+
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
+from torch.optim import Adam
+# import torch.nn.functional as F
+
+import numpy as np
+
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_auc_score
 
 import pandas as pd
 from pathlib import Path
-import numpy as np
 
 import re
 
@@ -43,14 +51,11 @@ def preprocess_data_file(filepath):
 
     df = pd.read_excel(filepath, header = None, index_col = None)
 
-    if df.shape == (251, 12): 
-        breakpoint()	
 
     assert df.shape == (NUM_TIME_STEPS, NUM_LEADS), f"error: num_timesteps = {df.shape[0]} num_leads = {df.shape[1]}"
 
 
     return df
-
 
 def preprocess_directory(input_dir="./data/InterpolatedQRS/", get_post=False):
 	"""
@@ -159,8 +164,6 @@ def get_patient_id(filepath):
 	
 	return matches
 
-	
-
 def get_patient_ids(filepaths): 
 	"""
 	Function to retrieve all the patient ids from a python list 
@@ -184,8 +187,6 @@ def get_patient_ids(filepaths):
 	
 	
 	return new_patient_ids
-
-
 
 class ECGDataset(Dataset):
 	def __init__(self, data_tensor, data_patient_ids, labels):
@@ -266,7 +267,280 @@ class ECGDataset(Dataset):
 		"""
 		
 		patient_id = self.idx_patient_mapping[idx]
-		return self.data[idx], self.labels[patient_id], patient_id
+	
+
+		ecg_training_tensor = torch.tensor(self.data[idx], dtype=torch.float32)
+		label = torch.tensor(self.labels[patient_id], dtype=torch.int64).unsqueeze(0) # need to have an unsqueezed for shape documentation
+
+
+		return ecg_training_tensor, label, patient_id 
+
+class ECGNet(nn.Module): # TODO: Complete but do not test + learn and understand the code later
+    """
+    Network that performs 1d convolutions to combine informaation locally to transform information to another representation that is useful
+    """
+    def __init__(self, num_leads=12, seq_length=250):
+
+	
+        super(ECGNet, self).__init__()
+        
+        # Parameters
+        self.num_leads = num_leads
+        self.seq_length = seq_length
+        
+        # Initial per-lead feature extraction
+        self.lead_features = nn.Sequential(
+            nn.Conv1d(1, 32, kernel_size=7, padding=3),
+            nn.ReLU(),
+            nn.BatchNorm1d(32),
+            nn.MaxPool1d(2),
+            
+            nn.Conv1d(32, 64, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.BatchNorm1d(64),
+            nn.MaxPool1d(2),
+            
+            nn.Conv1d(64, 128, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm1d(128),
+            nn.MaxPool1d(2)
+        )
+        
+        # Calculate the size after convolutions and pooling
+        self.feature_length = seq_length // 8  # After 3 max pooling layers
+        
+        # Combine features across leads
+        self.combine_leads = nn.Sequential(
+            nn.Linear(128 * self.feature_length * num_leads, 256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(64, 1)
+        )
+        
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        batch_size = x.shape[0]
+        
+        # Process each lead independently
+        # Reshape to process leads independently: (batch, leads, time, 1) -> (batch * leads, 1, time)
+        x = x.permute(0, 1, 3, 2).reshape(-1, 1, self.seq_length)
+        
+        # Extract features from each lead
+        x = self.lead_features(x)
+        
+        # Reshape to combine lead features
+        x = x.reshape(batch_size, self.num_leads, -1)
+        x = x.reshape(batch_size, -1)  # Flatten for fully connected layers
+        
+        # Combine features from all leads
+        x = self.combine_leads(x)
+        x = self.sigmoid(x)
+        
+        return x
+
+def train_epoch(model, train_loader, criterion, optimizer, device):
+    model.train()
+    running_loss = 0.0
+    predictions = []
+    true_labels = []
+    
+    for data, labels, _ in train_loader:
+        data, labels = data.to(device), labels.to(device)
+        labels = labels.float().to(device)  # Convert to float for BCE loss note for later + add to device
+        
+        optimizer.zero_grad()
+        outputs = model(data) # TODO: verify with testing that the outputs are inside the gpu not cpu (need a bottleneck flow showing the data *in* specific spots
+		
+
+        loss = criterion(outputs, labels) # TODO: analyze and formalize behavior of test in this in the test what exactly need the inputs to be? )
+        loss.backward()
+        optimizer.step()
+        
+        running_loss += loss.item()
+        predictions.extend(outputs.detach().cpu().numpy())
+        true_labels.extend(labels.cpu().numpy())
+    
+    epoch_loss = running_loss / len(train_loader)
+    epoch_auc = roc_auc_score(true_labels, predictions)
+    
+    return epoch_loss, epoch_auc
+
+
+def validate(model, val_loader, criterion, device):
+    model.eval()
+    running_loss = 0.0
+    predictions = []
+    true_labels = []
+    
+    with torch.no_grad():
+        for data, labels, _ in val_loader:
+            data, labels = data.to(device), labels.to(device)
+            labels = labels.float()
+            
+            outputs = model(data)
+            loss = criterion(outputs, labels)
+            
+            running_loss += loss.item()
+            predictions.extend(outputs.cpu().numpy())
+            true_labels.extend(labels.cpu().numpy())
+    
+    val_loss = running_loss / len(val_loader)
+    val_auc = roc_auc_score(true_labels, predictions)
+    
+    return val_loss, val_auc
+
+def train_model(dataset, model, num_epochs=100, batch_size=16, learning_rate=0.001):
+    """
+    Robust training loop with input validation and error checking
+    
+    Args:
+        dataset (ECGDataset): The dataset
+        model (nn.Module): The model to train
+        num_epochs (int): Number of epochs
+        batch_size (int): Batch size
+        learning_rate (float): Learning rate
+        
+    Returns:
+        dict: Training history and best model state
+    """
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Validate inputs
+    if not isinstance(dataset, ECGDataset):
+        raise TypeError("Dataset must be instance of ECGDataset")
+    if batch_size > len(dataset):
+        raise ValueError(f"Batch size ({batch_size}) larger than dataset size ({len(dataset)})")
+        
+    model = model.to(device)
+    
+    # Create data splits with validation
+    splits = create_data_splits(dataset)
+    min_split_size = min(len(splits['train']), len(splits['val']))
+    if min_split_size < batch_size:
+        raise ValueError(f"Split size ({min_split_size}) smaller than batch size ({batch_size})")
+    
+    # Create data loaders with error checking
+    train_loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=SubsetRandomSampler(splits['train']),
+        num_workers=0,  # Avoid multiprocessing issues
+        drop_last=False  # Keep all samples
+    )
+    
+    val_loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=SubsetRandomSampler(splits['val']),
+        num_workers=0,
+        drop_last=False
+    )
+    
+    # Initialize training components
+    criterion = nn.BCELoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    
+    # Training state
+    best_val_auc = 0
+    best_model_state = None
+    patience = 10
+    patience_counter = 0
+    history = {
+        'train_loss': [], 'train_auc': [],
+        'val_loss': [], 'val_auc': []
+    }
+    
+    try:
+        for epoch in range(num_epochs):
+            # Training phase
+            train_loss, train_auc = train_epoch(model, train_loader, criterion, optimizer, device)
+            
+            # Validation phase
+            val_loss, val_auc = validate(model, val_loader, criterion, device)
+            
+            # Update history
+            history['train_loss'].append(train_loss)
+            history['train_auc'].append(train_auc)
+            history['val_loss'].append(val_loss)
+            history['val_auc'].append(val_auc)
+            
+            print(f'Epoch {epoch+1}/{num_epochs}:')
+            print(f'Train Loss: {train_loss:.4f}, Train AUC: {train_auc:.4f}')
+            print(f'Val Loss: {val_loss:.4f}, Val AUC: {val_auc:.4f}')
+            
+            # Model selection
+            if val_auc > best_val_auc:
+                best_val_auc = val_auc
+                best_model_state = model.state_dict().copy()
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    print('Early stopping triggered')
+                    break
+                    
+    except Exception as e:
+        print(f"Training interrupted: {str(e)}")
+        if best_model_state is not None:
+            print("Recovering best model state...")
+            model.load_state_dict(best_model_state)
+    
+    # Always restore best model state
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
+    
+    return {
+        'model': model,
+        'history': history,
+        'best_val_auc': best_val_auc
+    }
+
+
+
+def create_data_splits(dataset, n_splits=5, fold_idx=0, val_size=0.2):
+    """
+    Create train/val/test splits that can be extended to k-fold CV.
+    Initially uses only one fold but structured for easy k-fold extension.
+    
+    Args:
+        dataset: ECGDataset instance
+        n_splits: Number of folds (default=5)
+        fold_idx: Which fold to use as test set (default=0)
+        val_size: Size of validation set as fraction of training data
+    
+    Returns:
+        dict containing train, val, and test indices
+    """
+    # Get labels for stratification
+    labels = []
+    for i in range(len(dataset)):
+        _, label, _ = dataset[i]
+        labels.append(label.item())
+    labels = np.array(labels)
+    
+    # Create stratified k-fold splits
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    
+    # Get indices for the specified fold
+    splits = list(skf.split(np.zeros(len(dataset)), labels))
+    train_idx, test_idx = splits[fold_idx]
+    
+    # Further split training data into train and validation
+    val_size = int(len(train_idx) * val_size)
+    val_idx = train_idx[:val_size]
+    train_idx = train_idx[val_size:]
+    
+    return {
+        'train': train_idx,
+        'val': val_idx,
+        'test': test_idx
+    }
+
+
 def main():
 	ecg_tensors, filepaths = preprocess_directory()
 	
@@ -276,21 +550,94 @@ def main():
 	labels = preprocess_patient_labels() # change to a dictionary
 
 	
-	# TODO: function to remove the information to put into the dataset	
-	# TODO: Combine the processes here into a Pytorch Dataset
 	dataset = ECGDataset(ecg_tensors, training_data_file_ids, labels)
 	
-	breakpoint()	
-	# prototype manual system testing other unknown errors can manifest later
+	splits = create_data_splits(dataset, n_splits=5, fold_idx=0) # strategy - using pointers for spllits is much more useful than actually splitting
+	train_loader = DataLoader( dataset, 
+		batch_size=32, 
+		sampler=SubsetRandomSampler(splits['train']), # notice here that the train variable greatly simplifies the approach (pseudo discovery based)
+		num_workers=0
+	)
+	val_loader = DataLoader(
+		dataset, 
+		batch_size=32,
+		sampler=SubsetRandomSampler(splits['val']),
+		num_workers=0
+	)
+	test_loader = DataLoader(
+		dataset, 
+		batch_size=32,
+		sampler=SubsetRandomSampler(splits['test']),
+		num_workers=0
+	)
 
 
 
-	# traansforms the data into an interface.
+	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	assert device == torch.device('cuda') # assuemd device to be a string when it was specificallly torch.device('cuda') wrapper
 
 
+	model = ECGNet().to(device)
 
-	# define model
-	# model train on data.  
+	class_weights = torch.Tensor([0.8]).to(device)# TODO: replace this with class weightsdataset.get_class_weights() error the weights here influenced something about BCE (entroyp of the mind)
+	# TODO: Transform Uncertainty of my representation of how tensor works to --> certainty about the workings
+	# class weights - VERY IMPORTANT to consider the class weights and where they are, the hardware interface is shown here. 
+	criterion = torch.nn.BCELoss(weight=class_weights)  # subjective uncertaainties - what is BCE data type inputs? class weights why impt? 
+	# df is BCE loss required to have a label output? whawt is teh output
+	optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+	# 6. Training loop
+	num_epochs = 100
+	best_val_auc = 0
+	best_model_state = None
+	patience = 10
+	patience_counter = 0
+
+	for epoch in range(num_epochs):
+		# Train
+		train_loss, train_auc = train_epoch( 
+		    model=model,
+		    train_loader=train_loader,
+		    criterion=criterion,
+		    optimizer=optimizer,
+		    device=device
+		)
+
+		# Validate
+		val_loss, val_auc = validate(
+		    model=model,
+		    val_loader=val_loader,
+		    criterion=criterion,
+		    device=device
+		)
+
+		# Print metrics
+		print(f'Epoch {epoch+1}/{num_epochs}:')
+		print(f'Train Loss: {train_loss:.4f}, Train AUC: {train_auc:.4f}')
+		print(f'Val Loss: {val_loss:.4f}, Val AUC: {val_auc:.4f}')
+
+		# Model selection and early stopping
+		if val_auc > best_val_auc:
+			best_val_auc = val_auc
+			best_model_state = model.state_dict().copy()
+			patience_counter = 0
+
+			# Save best model
+			save_dir = Path('models')
+			save_dir.mkdir(exist_ok=True)
+			torch.save({
+			'epoch': epoch,
+			'model_state_dict': model.state_dict(),
+			'optimizer_state_dict': optimizer.state_dict(),
+			'val_auc': val_auc,
+			}, save_dir / 'best_model.pt')
+		else:
+			patience_counter += 1
+			if patience_counter >= patience:
+				print('Early stopping triggered')
+				break
+
+
 
 
 	return

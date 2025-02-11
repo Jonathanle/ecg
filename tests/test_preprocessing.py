@@ -24,6 +24,18 @@ def patient_excel_static():
     data_tensor, file_paths = preprocess_directory() # this could be a fixture that stays constant
     
     return data_tensor, file_paths
+
+@pytest.fixture(scope='function')
+def ecg_dataset_fixture(patient_excel_static): # fine to have function scope?
+    ecg_tensors, filepaths = preprocess_directory()
+
+    training_data_file_ids = get_patient_ids(filepaths)
+
+    labels = preprocess_patient_labels()
+
+    dataset = ECGDataset(ecg_tensors, training_data_file_ids, labels)
+
+    return dataset
 @pytest.fixture(scope='function')
 def sample_excel(tmppath = "./data/misc"): 
     """Create a temporary Excel file with sample data."""
@@ -249,6 +261,48 @@ def test_get_patient_ids_eq():
     for patient_id, true_patient_id in zip(patient_ids, true_patient_ids): 
         assert true_patient_id == patient_id
 
+def test_ECG_dataset_training_data_correct_shape(ecg_dataset_fixture): # framework when I change a var name any other variables names I have to change? note to self if i have a ecg fixture as this name
+    """
+    Idea - I can have shitty tests that has false positives, but get tests that increasingly build 
+    on one another to bootstrap if the test caase is too complicaated
+    this will false positive everything make it increasingly constricted
+
+    sb - test allows for learning more about exactly how to use a function discovering errors anyway 
+
+    insterad of a loose intuitiuno what *exactly* do you want thefucntion to 
+
+    intuition if i have a test and within a restricted time i do not complete an assignment or deadline then i recognize the testing as not worth it and strictly defined as "inefficient" with some deadilone
+
+    time spent - 1hr completing: probalbly less cost than the errors in all time later
+    """
+
+    dataset = ecg_dataset_fixture
+    
+    first_patient_ecg, outcome, patient_id = dataset[0]
+    
+    # sb this one is unce4tain, need to bootstrap with my learning pdb experiment -- VERFIED TRUE
+    #assert isinstance(first_patient_ecg, np.ndarray) # must be a np.array? no we want a torch tensor
+
+    assert isinstance(first_patient_ecg, torch.Tensor) 
+    assert isinstance(outcome, torch.Tensor)
+    assert isinstance(patient_id, str) # I know this is correct but this is documentation / monitors regression hits (find if it actually is valuable) I know but I stay conservative
+
+    assert first_patient_ecg.dtype == torch.float32 # what should this be ? bootstrap from pdb, 
+    assert first_patient_ecg.shape == torch.Size([250, 12, 1]) # exactly right uncertain if test well
+    assert outcome.dtype == torch.int64 # Advice from Claude to standardize for CE Loss
+    assert outcome.shape == torch.Size([1]) # exactly right uncertain if test well
+
+
+    # test if the string has correct id using knowledge of re
+
+    pattern = re.compile(r"R\d+") # need to add \d not d+, use recompile to standardize pattern 
+    # error add a r
+
+    matches = pattern.match(patient_id) #NOT re.find re.match need to add the test str
+    # match specifically starts from the beginning as a strict reuiqrement from searchk
+
+    assert matches is not None
+     
 
     
 
