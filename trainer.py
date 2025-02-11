@@ -12,6 +12,8 @@ import pandas as pd
 from pathlib import Path
 import numpy as np
 
+import re
+
 def preprocess_data_file(filepath):
     """
     Process 1 single xlsx file to retrieve the pd dataframe
@@ -55,12 +57,16 @@ def preprocess_directory(input_dir="./data/InterpolatedQRS/", get_post=False):
 	Processes all the xlsx files and returns a group of the pytorch
 	datasets
 
+	Processes files with satisfying the regex "Rd+" so only anything with R20 R100 etc.
+
 	Params: 
 	input_dir (str) - directory containing all patient xlsx files
 	get_post (str) - retrieve the post xor the pre files
 	returns: 
 		np.array - np array of shape (num_patients, lead, time_sequence, voltage) *q1 
-		filenames - string representation of the filenames
+		filenames - string representation of the filenames filtered or not?
+			note these - some tests rely on it being filenames
+			
 	"""
 
 	# Convert input directory to Path object for easier handling
@@ -78,6 +84,10 @@ def preprocess_directory(input_dir="./data/InterpolatedQRS/", get_post=False):
 		# Assuming you have a function like process_single_file that returns
 		# an array of shape (lead, time_sequence, voltage)
 		patient_data = preprocess_data_file(posix_file_path)  
+
+		if len(get_patient_id(str(posix_file_path))) == 0: 
+			continue # Filter Clin Trials
+
 		patient_arrays.append(patient_data)
 		file_path_arrays.append(str(posix_file_path)) # changed this to get the str because file_path is a posix path NOT an str
 
@@ -95,26 +105,43 @@ def preprocess_directory(input_dir="./data/InterpolatedQRS/", get_post=False):
 
 def preprocess_patient_labels(input_dir="./data/PatientCohort_ECG.xlsx"): 
 	"""
-	Function that processes the patient labels, returning a dictionary mapping of the patients IDs to the outcome
-
+	Function that processes the patient labels, returning a dictionary mapping of the patients IDs to the 'Binary Response' column
+	Patient IDs that are not of the form "RX" or "RXX" or "RXX" are discarded if R?? has non digits it is also rejected
+		
+	If the corresponding patient values not 0 or 1 reject
 
 	Params: 
 		input_dir (str): directory to the cohort xlsx file
 
 
-	Returns (dict): Dictionary containing key mappings to the BinaryResponse
+	Returns: 
+		dict[str, int],  Dictionary containing key mappings to the BinaryResponse
 	Variable
-	"""
-	
+	""" 
+	VALUE_COLUMN= 'Binary Response'
+
 	df = pd.read_excel("./data/PatientCohort_ECG.xlsx", header=0, index_col=0)
-
 	
-	dict_mapping = df['Binary Response'].to_dict() 
+	dict_mapping = df[VALUE_COLUMN].to_dict() 
 
-	return dict_mapping
+	new_dict = {}	
+	for key, value in dict_mapping.items():
+
+		condition = isinstance(key, str) and len(key) >= 2 
+		if (isinstance(key, str) and
+			len(key) >= 2 and 
+			key[0] == "R" and 
+			key[1].isdigit() and
+			(value == 0 or value == 1)): 
+			
+			new_dict[key] = value			
 
 
-def get_patient_id(filename): 
+
+	return new_dict
+
+
+def get_patient_id(filepath): 
 	"""
 	Function to strip the filename and get the Patient ID, this function looks
 	for the first instance of an underscore and returns the representation of it
@@ -124,58 +151,128 @@ def get_patient_id(filename):
 		filename (str): filename of the format RXX_ ..... .xlsx
 	
 	Returns: 
-		patient id (str) - Patient id with the "RXX" 
+		str - Patient id with the "RXX" 
+	"""
+	pattern = r'R\d+'
+	
+	matches = re.findall(pattern, filepath)
+	
+	return matches
+
+	
+
+def get_patient_ids(filepaths): 
+	"""
+	Function to retrieve all the patient ids from a python list 
+
+	Params: 
+		filepaths (list) - python list of strings corresponding to filenames 
+	Returns:
+		new_patient_ids (list) - python list containing patient ids
 	"""
 	
-	for i in range(0, len(filename)): 
-		if filename[i] == "_": 
-			return filename[:i]
-	raise Exception("Error: no _ foudn in filename")
+		
+	new_patient_ids = []
+
+	for filepath in filepaths:
+		patient_id_list = get_patient_id(filepath)	
+		if len(patient_id_list) != 1: 
+			breakpoint()
+		assert len(patient_id_list) == 1, "error: len patient_id list ne 1" # one hit (extremely valuable caught the fact that Clintrial was also a found file assumed before that it was only RXX files found
+
+		new_patient_ids.append(patient_id_list[0])
 	
+	
+	return new_patient_ids
+
+
+
 class ECGDataset(Dataset):
-    def __init__(self, data_tensor, labels):
-        """
-        Args:
-            data_tensor (torch.Tensor): Tensor containing the data
-            labels (list or torch.Tensor): Labels for the data
-        """
-        self.data = data_tensor
+	def __init__(self, data_tensor, data_patient_ids, labels):
+		"""
+		Args:
+		    data_tensor (torch.Tensor): Tensor containing the data
+		    data_patient_ids (list): list with ids corresponding to data tensor indices
+		    labels (dict[patient_id, binary_outcome): list for data
 
-        self.labels = torch.tensor(labels) if not torch.is_tensor(labels) else labels
-        
-        # Verify data and labels have matching first dimension
-        assert self.data.shape[0] == len(self.labels), \
-            f"Data size {self.data.shape[0]} doesn't match labels size {len(self.labels)}"
+		This dataset will correct and match training data only to the labels 
+		reconstructing the dataset for now it will be unorganized and unrefactored
+		DF 
+		"""
+		
+		self.data, self.mapping, self.labels = self.create_data_interface(data_tensor, data_patient_ids, labels)
+	 
+		# Verify data and labels have matching first dimension
+		assert self.data.shape[0] == len(self.labels), \
+		    f"Data size {self.data.shape[0]} doesn't match labels size {len(self.labels)}"
 
-    def __len__(self):
-        """Return the total number of samples"""
-        return len(self.data)
 
-    def __getitem__(self, idx):
-        """
-        Args:
-            idx (int): Index of the data sample
-        Returns:
-            tuple: (data_sample, label)
-        """
-        return self.data[idx], self.labels[idx]
+	def create_data_interface(self, data, data_patient_ids, labels): 
+		"""
+		Create pytorch datasets # TODO TEST, assume harder to refactor higher cost
+		to fix from entropy + need to meet urgent deadlines
+
+		Assumes alll data for labels exists in training data	
+
+		Params: 
+		    labels
+		    data
+		"""
+
+		patient_training_index_mapping = {}
+
+		num_data = len(labels.items())
+		new_tensor_shape = list(data.shape)
+		new_tensor_shape[0] = num_data
+
+		new_tensor = np.zeros(new_tensor_shape)
+
+
+		# create patient data mapping
+		training_data_patient_mapping = {}
+		for i in range(len(data_patient_ids)):
+
+			patient_id = data_patient_ids[i] 
+			training_data_patient_mapping[patient_id] = i 
+
+		for i, (patient_id, label) in enumerate(labels.items()): 
+			data_index = training_data_patient_mapping[patient_id]
+
+			data_tensor = data[data_index]
+
+			new_tensor[i] = data_tensor
+			patient_training_index_mapping[patient_id] = i
+
+		return new_tensor, patient_training_index_mapping, labels
+
+
+	def __len__(self):
+		"""Return the total number of samples"""
+		return len(self.data)
+
+	def __getitem__(self, idx):
+		"""
+		Args:
+		    idx (int): Index of the data sample
+		Returns:
+		    tuple: (data_sample, label)
+		"""
+		return self.data[idx], self.labels[idx]
 def main():
-	# preprocess data --> Tensor  TODO: 
-	ecg_tensors, filenames = preprocess_directory()
+	ecg_tensors, filepaths = preprocess_directory()
+	
+	training_data_file_ids = get_patient_ids(filepaths)# helper fucntion due to dependency
+	
 	# filenames are weird --> remove to get only the patient information
 	labels = preprocess_patient_labels() # change to a dictionary
 
-	breakpoint()	
-
-
-	# added this in the main because of a dependency of adding filename to the tests (change in interface leads to bad tests)
-	for i in range(len(labels)): # warning: one of the labels is a NON patient id need to account for this TODO 
-		labels[i] = get_patient_id(labels[i])
-
+	
 	# TODO: function to remove the information to put into the dataset	
-
 	# TODO: Combine the processes here into a Pytorch Dataset
-
+	dataset = ECGDataset(ecg_tensors, training_data_file_ids, labels)
+	
+	breakpoint()	
+	# prototype manual system testing other unknown errors can manifest later
 
 
 

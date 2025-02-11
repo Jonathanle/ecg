@@ -10,6 +10,7 @@ from trainer import *
 import torch
 import os
 
+import re
 """
 Testing file for testing the functions of the preprocessor
 Ensure that this file is within tests/data
@@ -113,9 +114,19 @@ def test_excel_directory_creation_metaadata(patient_excel_static, row, col):  # 
 
     assert len(file_paths) == data_tensor.shape[0]
 
+def test_excel_directory_no_clin_trial(patient_excel_static):
 
+    # Heuristic not as sound or precise (pootential for false positives) but heuristically useful
 
+    _, file_paths = patient_excel_static
 
+    # this one i will learn regex 
+
+ 
+    for filepath in file_paths: 
+        match = re.search(r"Clin", filepath, re.IGNORECASE)
+
+        assert match == None
 
 def test_torch_dataset_loading(patient_excel_static): 
     data_tensor, file_paths = patient_excel_static
@@ -138,10 +149,8 @@ def test_pre_images_is_default(patient_excel_static):
 def test_patient_dataset_loading_intermediate(): 
     # Start with the certainty here create the intermediate --> finish --> complete allows building of a code withotu needing to refactor
     # Framework - Bootstrapping the test with the intermediate code - both are built up so that it is easy to verify
-
-
-   
     # added header + index col = 0 because cols and rows were labels for rows/columns
+
     dict_mapping = preprocess_patient_labels()
     
 
@@ -149,6 +158,32 @@ def test_patient_dataset_loading_intermediate():
     assert dict_mapping['R04'] == 0
 
     # assert df['RVEFB']['R03'] == 48.35
+def test_patient_data_set_is_int_and_binary(): 
+    """
+    Learning notes - to test the "classifier" or to meta test, I made the test fail to show that it classifes wrong instances within reason to bootstraap empirica
+    confidence DF - get all notes of instances where I find if it does FP or FN. is testing failure then showing TN (it wont false negative) 
+    what if the code is bad, and it test true? Problem - False positive - code is bad but it classifies it as good, need to discriminate 
+    """
+    dict_mapping = preprocess_patient_labels()
+
+    number_test = dict_mapping['R03']
+
+    assert isinstance(number_test,  int) # I verified here from my problem that the "acceptable space" is very insanely constricted + idenfiable
+    assert number_test == 1 or number_test == 0
+
+def test_preprocess_patient_labels_only_patient_ids(): 
+    dict_mapping = preprocess_patient_labels()
+   
+    # Function I believe is precise, it only accepts strings greatre than 0 that have R as a key -> this is acceptable anything else is bad. 
+    # Work to improve on -- acceptable states beyond R - do you want R xrrwe think about the objective subspace
+    for key, value in dict_mapping.items(): 
+        assert isinstance(key, str)
+        assert len(key) > 0
+        assert key[0] == "R" 
+       
+        # Verify the rest of the number is digits
+        assert len(key) >= 2
+        assert key[1:].isdigit()
 
 def meta_test_test_patient_dataset_loading_intermediate(): 
     """
@@ -184,15 +219,39 @@ def meta_test_test_patient_dataset_loading_intermediate():
     # testing classifcation to false
     assert eval2 == False # our test for the outside
 
+@pytest.mark.parametrize('filename, patient_id', [
+    ('data/interpqrs/R02_asdfasdasdf.xlsx', 'R02'), 
+    ('data/interpqrs/R02_asdfasdasdf.xlsx', 'R02'),
+    ('reports/R150_quarterly_summary.pdf', 'R150'),
+    ('archive/2024/R99_legacy_data_v2.csv', 'R99'),
+    ('temp/R47_draft_20240210.txt', 'R47'),
+    ('outputs/analysis_R23_final.json', 'R23'),
+])
+def test_get_patient_id(filename, patient_id): 
+    """
+    Test Equivalence Cases
+    """
 
-def test_get_patient_id(): 
-    filename = "R02_asdfasdfafdasfasfd.xlsx"
-    # patient_id = "asdfasdf"# get_patient_id(filename) wrote this test to fail initially
-
-    patient_id = get_patient_id(filename)
-
-    assert patient_id == "R02"
+    matches = get_patient_id(filename)
     
+    assert len(matches) == 1
+    assert matches[0] == patient_id
+   
+def test_get_patient_ids_eq(): 
+    filepaths= ['asdfsadf/R01sss.xlsx', 'asdfsadf/R31sss.xlsx', 'asdfsadf/R207sss.xlsx']
+    true_patient_ids = ['R01', 'R31', 'R207']
+
+    patient_ids = get_patient_ids(filepaths)
+
+    assert len(patient_ids) == len(filepaths)
+    
+    # mistake from before used imprecise RXX accepting any digit 
+    for patient_id, true_patient_id in zip(patient_ids, true_patient_ids): 
+        assert true_patient_id == patient_id
+
+
+    
+
 
 if __name__ == '__main__':
     sample_excel()
