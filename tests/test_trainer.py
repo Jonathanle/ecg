@@ -18,7 +18,18 @@ import torch
 
 @pytest.fixture(scope='module')
 def patient_dataset():
-    return 
+    ecg_tensors, filepaths = preprocess_directory(get_post=True)
+
+    training_data_file_ids = get_patient_ids(filepaths)# helper fucntion due to dependency
+
+    # filenames are weird --> remove to get only the patient information
+    labels = preprocess_patient_labels() # change to a dictionary
+
+
+    dataset = ECGDataset(ecg_tensors, training_data_file_ids, labels)
+
+    return dataset
+
 
 
 def test_cuda_is_available():
@@ -83,10 +94,57 @@ def test_exception_loss_item():
 
     assert str(exc_info.value) == "a Tensor with 2 elements cannot be converted to Scalar"
 
-def test_CV_split():
+def test_CV_split_len_5(patient_dataset):
     """
     Show that StratifiedKFold splits datasets into equal proportions of sample
     maybe these entropy can be temporararily corrected via using breakpoint() 
-    """
 
-    return
+    Show that create_data_split splits it into 5 files
+    """
+    data_splits = create_data_splits(patient_dataset, n_splits=5)
+
+    assert len(data_splits) == 5
+
+def test_CV_split_has_dict(patient_dataset): 
+    """
+    Testing Function to describe if the format of each split is a dict
+    """
+    data_splits = create_data_splits(patient_dataset, n_splits=5)
+
+    for item in data_splits: 
+        assert isinstance(item, dict)
+        assert 'train' in item
+        assert 'test' in item
+        assert 'val' in item
+
+def test_CV_split_equal_split(patient_dataset): 
+    """
+    Testing Function to describe if the format of each split is a dict
+
+    - equal split
+    - no zero length split - never an acceptable state where we have test sets.
+    """
+    data_splits = create_data_splits(patient_dataset, n_splits=5)
+    
+    patient_dataset_len = len(patient_dataset)
+
+    for data_split in data_splits: 
+        train_set = data_split['train']
+        val_set = data_split['test']
+        test_set = data_split['val']
+    
+        total_len = len(train_set) + len(val_set) + len(test_set)
+       
+        """
+        Learn about deriving information from events -> this was directly made from an integrated system test that the length of the dataloader did not work
+
+        - very different than subjective anticipation of errors
+
+        """
+        assert len(train_set) != 0 
+        assert len(val_set) != 0 
+        assert len(test_set) != 0
+
+        assert total_len == patient_dataset_len
+        
+    

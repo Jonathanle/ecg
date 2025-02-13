@@ -392,7 +392,7 @@ def validate(model, val_loader, criterion, device):
     
     return val_loss, val_auc
 
-def train_model(model, optimizer, criterion, train_loader, val_loader, device):
+def train_model(model, optimizer, criterion, train_loader, val_loader, device, save_model=True):
 	"""
 	Train a Model To optize towards parameters
 
@@ -400,6 +400,9 @@ def train_model(model, optimizer, criterion, train_loader, val_loader, device):
 		model (torch.nn) - model for optimizing
 		optimizer (torch.optim) - model for optimizing
 		criterion (torch.nn.modules.loss) - 
+		train_loader (torch.??) - Datalloader for training data
+		val_loader (torch.??) - Dataloader for validation data
+		save_model (boolean) - flag to save the best AUC model. Defaults to True
 
 	Returns: (what? I need to be very intentional about how I create the logic)o
 
@@ -411,7 +414,7 @@ def train_model(model, optimizer, criterion, train_loader, val_loader, device):
 	
 
 	"""
-	# Config
+	# TODO: Refactor into a Main Config Class
 	num_epochs = 100
 	best_val_auc = 0
 	best_model_state = None
@@ -441,11 +444,15 @@ def train_model(model, optimizer, criterion, train_loader, val_loader, device):
 		print(f'Train Loss: {train_loss:.4f}, Train AUC: {train_auc:.4f}')
 		print(f'Val Loss: {val_loss:.4f}, Val AUC: {val_auc:.4f}')
 
+	
 		# Model selection and early stopping
 		if val_auc > best_val_auc:
 			best_val_auc = val_auc
 			best_model_state = model.state_dict().copy()
 			patience_counter = 0
+
+			if save_model == False:
+				continue
 
 			# Save best model
 			save_dir = Path('models')
@@ -462,11 +469,11 @@ def train_model(model, optimizer, criterion, train_loader, val_loader, device):
 				print('Early stopping triggered')
 				break
 
+	return best_val_auc
 
 
 
-
-def create_data_splits(dataset, n_splits=5, fold_idx=0, val_size=0.2):
+def create_data_splits(dataset, n_splits=5, val_size=0.2):
     """
     Create train/val/test splits that can be extended to k-fold CV.
     Initially uses only one fold but structured for easy k-fold extension.
@@ -478,7 +485,7 @@ def create_data_splits(dataset, n_splits=5, fold_idx=0, val_size=0.2):
         val_size: Size of validation set as fraction of training data
     
     Returns:
-        dict containing train, val, and test indices
+        list of folds with a dict containing train, val, and test indices
     """
     # Get labels for stratification + splitting
     labels = []
@@ -495,23 +502,38 @@ def create_data_splits(dataset, n_splits=5, fold_idx=0, val_size=0.2):
     """
     Splits [([1 2,3], [4, 5, 6]),... ]
     """
+    data_splits = [] # difficult to name and specify
 
 
-    train_idx, test_idx = splits[fold_idx]
+    for train_idx, test_idx in splits: 
     
-    # Further split training data into train and validation
-    val_size = int(len(train_idx) * val_size)
-    val_idx = train_idx[:val_size]
-    train_idx = train_idx[val_size:]
-    
-    return {
+        # Further split training data into train and validation
+        val_size_int = int(len(train_idx) * val_size) # val_size is used wrong here
+        val_idx = train_idx[:val_size_int]
+        train_idx = train_idx[val_size_int:]
+  
+        data_split =  {
         'train': train_idx,
         'val': val_idx,
         'test': test_idx
-    }
+        }
+
+        data_splits.append(data_split)
+    return data_splits
+
+def do_cross_fold_validation():
+	"""
+	Function that Trains Model on Different Folds of Dataset, returning the Best AUC for each fold. 
+Params:
+	"""
+
+	return
 
 
 def main():
+	assert torch.cuda.is_available(), "Error: CUDA required to run trainer.py"
+
+
 	ecg_tensors, filepaths = preprocess_directory(get_post=True)
 	
 	training_data_file_ids = get_patient_ids(filepaths)# helper fucntion due to dependency
@@ -521,40 +543,48 @@ def main():
 
 	
 	dataset = ECGDataset(ecg_tensors, training_data_file_ids, labels)
+
+	
+
+	best_aucs = []	
 	
 	# what exactly does this do? 
-	splits = create_data_splits(dataset, n_splits=5, fold_idx=0) # strategy - using pointers for spllits is much more useful than actually splitting
+	splits = create_data_splits(dataset, n_splits=5) # strategy - using pointers for spllits is much more useful than actually splitting
+	
+	for split in splits: 
 
-	train_loader = DataLoader(dataset, 
-		batch_size=32, 
-		sampler=SubsetRandomSampler(splits['train']), # notice here that the train variable greatly simplifies the approach (pseudo discovery based)
-		num_workers=0
-	)
-	val_loader = DataLoader(
-		dataset, 
-		batch_size=32,
-		sampler=SubsetRandomSampler(splits['val']),
-		num_workers=0
-	)
-	test_loader = DataLoader(
-		dataset, 
-		batch_size=32,
-		sampler=SubsetRandomSampler(splits['test']),
-		num_workers=0
-	)
+		# this is good but needed to be made for every split
+		train_loader = DataLoader(dataset, 
+			batch_size=32, 
+			sampler=SubsetRandomSampler(split['train']), # notice here that the train variable greatly simplifies the approach (pseudo discovery based)
+			num_workers=0
+		)
+		val_loader = DataLoader(
+			dataset, 
+			batch_size=32,
+			sampler=SubsetRandomSampler(split['val']),
+			num_workers=0
+		)
+		test_loader = DataLoader(
+			dataset, 
+			batch_size=32,
+			sampler=SubsetRandomSampler(split['test']),
+			num_workers=0
+		)
 
-	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-	assert device == torch.device('cuda') 
+		device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-	model = ECGNet().to(device)
+		# TODO: Refactor these into a main config file
+		model = ECGNet().to(device)
+		class_weights = torch.Tensor([0.8]).to(device)
+		criterion = torch.nn.BCELoss(weight=class_weights)  
+		optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-	class_weights = torch.Tensor([0.8]).to(device)
-	criterion = torch.nn.BCELoss(weight=class_weights)  # subjective uncertaainties - what is BCE data type inputs? class weights why impt?
-	# DF having a better precision with importing so that I know exactly where to go in "library" to get a piece of data to use
+		best_auc = train_model(model, optimizer, criterion, train_loader, val_loader, device, save_model=False) # TODO SB / Consider Adding the goal of setting save model to false
 
-	optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+		best_aucs.append(best_auc)
 
-	train_model(model, optimizer, criterion, train_loader, val_loader, device)
-
+	breakpoint()
+	# here i end up getting the best val AUC for the
 if __name__ == '__main__':
     main()
