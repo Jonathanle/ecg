@@ -69,3 +69,39 @@ fllow from computer to learn + using the word document.
 
 # 2-11
 - TODO - LT complete the new testing fucntionn for the Dataset object
+
+
+# atrohp or dedialate 
+
+
+# purpose of post
+- the long term obserbalb eoutcome is diferent post is still used 
+- long term observable outcome. 
+
+- post ecg signasl are not "hindsight" 
+ - ecg signals show the outcome? property observed much later not after treatment
+
+
+# Tasks on validation on the model  2/11/2025
+- verifyt
+- Ensemble 
+- Pre CRT for the response 
+- Post CRT
+- BE RIGOROUS  - use the validation set, use testing to make a very clear picture going on it should be invisible.
+--> ensemble
+
+# DF How can I interpret a model ?
+- Interpretability
+
+
+# Phd Development - It really is inherent stuff done allot of the load is the obtaining of certainty and full clarity this is high cost.
+- all of the small stuff.
+- With entropy a lot of the stuff.
+- invest energy thata minimizes entropy
+- phd simulation
+
+
+# 5fd 
+nightmarkes of phds solutions -> create
+- I need to then knoww and see the probelm space; then i need to then define the objectives and see if it is even worthy. (Evaluate) 
+

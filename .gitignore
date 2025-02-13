@@ -4,6 +4,10 @@
 ./pytest_cache/*
 data/*
 
+*.swp
+
+
+
 models/*
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -9,6 +9,7 @@ import torch
 
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
+
 from torch.optim import Adam
 # import torch.nn.functional as F
 
@@ -179,8 +180,6 @@ def get_patient_ids(filepaths):
 
 	for filepath in filepaths:
 		patient_id_list = get_patient_id(filepath)	
-		if len(patient_id_list) != 1: 
-			breakpoint()
 		assert len(patient_id_list) == 1, "error: len patient_id list ne 1" # one hit (extremely valuable caught the fact that Clintrial was also a found file assumed before that it was only RXX files found
 
 		new_patient_ids.append(patient_id_list[0])
@@ -393,205 +392,32 @@ def validate(model, val_loader, criterion, device):
     
     return val_loss, val_auc
 
-def train_model(dataset, model, num_epochs=100, batch_size=16, learning_rate=0.001):
-    """
-    Robust training loop with input validation and error checking
-    
-    Args:
-        dataset (ECGDataset): The dataset
-        model (nn.Module): The model to train
-        num_epochs (int): Number of epochs
-        batch_size (int): Batch size
-        learning_rate (float): Learning rate
-        
-    Returns:
-        dict: Training history and best model state
-    """
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # Validate inputs
-    if not isinstance(dataset, ECGDataset):
-        raise TypeError("Dataset must be instance of ECGDataset")
-    if batch_size > len(dataset):
-        raise ValueError(f"Batch size ({batch_size}) larger than dataset size ({len(dataset)})")
-        
-    model = model.to(device)
-    
-    # Create data splits with validation
-    splits = create_data_splits(dataset)
-    min_split_size = min(len(splits['train']), len(splits['val']))
-    if min_split_size < batch_size:
-        raise ValueError(f"Split size ({min_split_size}) smaller than batch size ({batch_size})")
-    
-    # Create data loaders with error checking
-    train_loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        sampler=SubsetRandomSampler(splits['train']),
-        num_workers=0,  # Avoid multiprocessing issues
-        drop_last=False  # Keep all samples
-    )
-    
-    val_loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        sampler=SubsetRandomSampler(splits['val']),
-        num_workers=0,
-        drop_last=False
-    )
-    
-    # Initialize training components
-    criterion = nn.BCELoss()
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    
-    # Training state
-    best_val_auc = 0
-    best_model_state = None
-    patience = 10
-    patience_counter = 0
-    history = {
-        'train_loss': [], 'train_auc': [],
-        'val_loss': [], 'val_auc': []
-    }
-    
-    try:
-        for epoch in range(num_epochs):
-            # Training phase
-            train_loss, train_auc = train_epoch(model, train_loader, criterion, optimizer, device)
-            
-            # Validation phase
-            val_loss, val_auc = validate(model, val_loader, criterion, device)
-            
-            # Update history
-            history['train_loss'].append(train_loss)
-            history['train_auc'].append(train_auc)
-            history['val_loss'].append(val_loss)
-            history['val_auc'].append(val_auc)
-            
-            print(f'Epoch {epoch+1}/{num_epochs}:')
-            print(f'Train Loss: {train_loss:.4f}, Train AUC: {train_auc:.4f}')
-            print(f'Val Loss: {val_loss:.4f}, Val AUC: {val_auc:.4f}')
-            
-            # Model selection
-            if val_auc > best_val_auc:
-                best_val_auc = val_auc
-                best_model_state = model.state_dict().copy()
-                patience_counter = 0
-            else:
-                patience_counter += 1
-                if patience_counter >= patience:
-                    print('Early stopping triggered')
-                    break
-                    
-    except Exception as e:
-        print(f"Training interrupted: {str(e)}")
-        if best_model_state is not None:
-            print("Recovering best model state...")
-            model.load_state_dict(best_model_state)
-    
-    # Always restore best model state
-    if best_model_state is not None:
-        model.load_state_dict(best_model_state)
-    
-    return {
-        'model': model,
-        'history': history,
-        'best_val_auc': best_val_auc
-    }
+def train_model(model, optimizer, criterion, train_loader, val_loader, device):
+	"""
+	Train a Model To optize towards parameters
 
+	Params:
+		model (torch.nn) - model for optimizing
+		optimizer (torch.optim) - model for optimizing
+		criterion (torch.nn.modules.loss) - 
 
+	Returns: (what? I need to be very intentional about how I create the logic)o
 
-def create_data_splits(dataset, n_splits=5, fold_idx=0, val_size=0.2):
-    """
-    Create train/val/test splits that can be extended to k-fold CV.
-    Initially uses only one fold but structured for easy k-fold extension.
-    
-    Args:
-        dataset: ECGDataset instance
-        n_splits: Number of folds (default=5)
-        fold_idx: Which fold to use as test set (default=0)
-        val_size: Size of validation set as fraction of training data
-    
-    Returns:
-        dict containing train, val, and test indices
-    """
-    # Get labels for stratification
-    labels = []
-    for i in range(len(dataset)):
-        _, label, _ = dataset[i]
-        labels.append(label.item())
-    labels = np.array(labels)
-    
-    # Create stratified k-fold splits
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    
-    # Get indices for the specified fold
-    splits = list(skf.split(np.zeros(len(dataset)), labels))
-    train_idx, test_idx = splits[fold_idx]
-    
-    # Further split training data into train and validation
-    val_size = int(len(train_idx) * val_size)
-    val_idx = train_idx[:val_size]
-    train_idx = train_idx[val_size:]
-    
-    return {
-        'train': train_idx,
-        'val': val_idx,
-        'test': test_idx
-    }
-
-
-def main():
-	ecg_tensors, filepaths = preprocess_directory()
+	Side Effects: 
+		- This will Report Current Training Performance in Epochs to stdout
+		- Will write the best modell to /model to torch.state_dict with the follwoing format:
+'epoch': epoch,                                                             			- 
+	TODO: Get More Description and Organize the Architecture to prevent entropy 
 	
-	training_data_file_ids = get_patient_ids(filepaths)# helper fucntion due to dependency
-	
-	# filenames are weird --> remove to get only the patient information
-	labels = preprocess_patient_labels() # change to a dictionary
 
-	
-	dataset = ECGDataset(ecg_tensors, training_data_file_ids, labels)
-	
-	splits = create_data_splits(dataset, n_splits=5, fold_idx=0) # strategy - using pointers for spllits is much more useful than actually splitting
-	train_loader = DataLoader( dataset, 
-		batch_size=32, 
-		sampler=SubsetRandomSampler(splits['train']), # notice here that the train variable greatly simplifies the approach (pseudo discovery based)
-		num_workers=0
-	)
-	val_loader = DataLoader(
-		dataset, 
-		batch_size=32,
-		sampler=SubsetRandomSampler(splits['val']),
-		num_workers=0
-	)
-	test_loader = DataLoader(
-		dataset, 
-		batch_size=32,
-		sampler=SubsetRandomSampler(splits['test']),
-		num_workers=0
-	)
-
-
-
-	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-	assert device == torch.device('cuda') # assuemd device to be a string when it was specificallly torch.device('cuda') wrapper
-
-
-	model = ECGNet().to(device)
-
-	class_weights = torch.Tensor([0.8]).to(device)# TODO: replace this with class weightsdataset.get_class_weights() error the weights here influenced something about BCE (entroyp of the mind)
-	# TODO: Transform Uncertainty of my representation of how tensor works to --> certainty about the workings
-	# class weights - VERY IMPORTANT to consider the class weights and where they are, the hardware interface is shown here. 
-	criterion = torch.nn.BCELoss(weight=class_weights)  # subjective uncertaainties - what is BCE data type inputs? class weights why impt? 
-	# df is BCE loss required to have a label output? whawt is teh output
-	optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-	# 6. Training loop
+	"""
+	# Config
 	num_epochs = 100
 	best_val_auc = 0
 	best_model_state = None
 	patience = 10
 	patience_counter = 0
+	# load model parameters for validation 
 
 	for epoch in range(num_epochs):
 		# Train
@@ -612,7 +438,6 @@ def main():
 		)
 
 		# Print metrics
-		print(f'Epoch {epoch+1}/{num_epochs}:')
 		print(f'Train Loss: {train_loss:.4f}, Train AUC: {train_auc:.4f}')
 		print(f'Val Loss: {val_loss:.4f}, Val AUC: {val_auc:.4f}')
 
@@ -640,6 +465,96 @@ def main():
 
 
 
-	return
+
+def create_data_splits(dataset, n_splits=5, fold_idx=0, val_size=0.2):
+    """
+    Create train/val/test splits that can be extended to k-fold CV.
+    Initially uses only one fold but structured for easy k-fold extension.
+    
+    Args:
+        dataset: ECGDataset instance
+        n_splits: Number of folds (default=5)
+        fold_idx: Which fold to use as test set (default=0)
+        val_size: Size of validation set as fraction of training data
+    
+    Returns:
+        dict containing train, val, and test indices
+    """
+    # Get labels for stratification + splitting
+    labels = []
+    for i in range(len(dataset)):
+        _, label, _ = dataset[i]
+        labels.append(label.item())
+    labels = np.array(labels)
+    
+    # Create stratified k-fold splits
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+   	
+    # Get indices for the specified fold
+    splits = list(skf.split(np.zeros(len(dataset)), labels))
+    """
+    Splits [([1 2,3], [4, 5, 6]),... ]
+    """
+
+
+    train_idx, test_idx = splits[fold_idx]
+    
+    # Further split training data into train and validation
+    val_size = int(len(train_idx) * val_size)
+    val_idx = train_idx[:val_size]
+    train_idx = train_idx[val_size:]
+    
+    return {
+        'train': train_idx,
+        'val': val_idx,
+        'test': test_idx
+    }
+
+
+def main():
+	ecg_tensors, filepaths = preprocess_directory(get_post=True)
+	
+	training_data_file_ids = get_patient_ids(filepaths)# helper fucntion due to dependency
+	
+	# filenames are weird --> remove to get only the patient information
+	labels = preprocess_patient_labels() # change to a dictionary
+
+	
+	dataset = ECGDataset(ecg_tensors, training_data_file_ids, labels)
+	
+	# what exactly does this do? 
+	splits = create_data_splits(dataset, n_splits=5, fold_idx=0) # strategy - using pointers for spllits is much more useful than actually splitting
+
+	train_loader = DataLoader(dataset, 
+		batch_size=32, 
+		sampler=SubsetRandomSampler(splits['train']), # notice here that the train variable greatly simplifies the approach (pseudo discovery based)
+		num_workers=0
+	)
+	val_loader = DataLoader(
+		dataset, 
+		batch_size=32,
+		sampler=SubsetRandomSampler(splits['val']),
+		num_workers=0
+	)
+	test_loader = DataLoader(
+		dataset, 
+		batch_size=32,
+		sampler=SubsetRandomSampler(splits['test']),
+		num_workers=0
+	)
+
+	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+	assert device == torch.device('cuda') 
+
+	model = ECGNet().to(device)
+
+	class_weights = torch.Tensor([0.8]).to(device)
+	criterion = torch.nn.BCELoss(weight=class_weights)  # subjective uncertaainties - what is BCE data type inputs? class weights why impt?
+	# DF having a better precision with importing so that I know exactly where to go in "library" to get a piece of data to use
+
+	optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+	train_model(model, optimizer, criterion, train_loader, val_loader, device)
+
 if __name__ == '__main__':
     main()
