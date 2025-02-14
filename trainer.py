@@ -508,7 +508,7 @@ class TrainingConfig():
 		self.validate_dataset_model_config(self.dataset, self.model) # always use called in functions to emphasize existence watch out for hidden inputs from class
 
 
-		self.use_post = True
+		self.use_post = False # TODO: for every subjective uncertainty - I will verify with testing does this actuallly go to post (manual verifcation says yes)
 		self.class_weights = torch.Tensor([0.8])#.to(device) removed to becauase .to is a device specific function)
 		self.criterion = torch.nn.BCELoss(weight=self.class_weights)  
 		self.lr = 0.001
@@ -802,11 +802,11 @@ def do_cross_fold_get_results(training_config, dataset):
 def main():
 	assert torch.cuda.is_available(), "Error: CUDA required to run trainer.py"
 
-	training_config = TrainingConfig(dataset=ECGCompositeDataset, model=ECGCompositeNet)
+	training_config = TrainingConfig()
 
 	dataset = training_config.get_dataset()
 
-
+	# TODO: Determine if the validation set is too small? like i want to then just use 2 training sets train and val, no need to leave out test???
 	best_aucs = do_cross_fold_get_results(training_config, dataset)
 
 	breakpoint()
