@@ -30,7 +30,15 @@ def patient_dataset():
 
     return dataset
 
+@pytest.fixture(scope='module')
+def model():
+    return ECGNet()
 
+@pytest.fixture(scope='module')
+def training_config(patient_dataset, model):    
+    
+    train_config = TrainingConfig(model=model, dataset=patient_dataset)  
+    return train_config
 
 def test_cuda_is_available():
     assert torch.cuda.is_available()
@@ -146,5 +154,29 @@ def test_CV_split_equal_split(patient_dataset):
         assert len(test_set) != 0
 
         assert total_len == patient_dataset_len
+def test_TrainingConfig_can_genereate_model(training_config):
         
+    model = training_config.retrieve_training_model()
+    assert isinstance(model, ECGNet)
+def test_TrainingConfig_can_generate_dataset(training_config):
+        
+    dataset = training_config.get_dataset()
+
+    assert len(dataset[0]) == 3 #heuristic for a good dataset
+
+def test_TrainingConfig_can_generate_dataloader(training_config):
+     
+    dataset = training_config.get_dataset()
+    dataloader = training_config.generate_dataloader(dataset, [0, 1, 10])
     
+
+    # how to verify ana analyze dataloader's state?
+
+    assert len(dataloader.sampler.indices) == 3 # next time for functions i know i need to learn about its state from the documethataion via asking claude
+    assert True
+
+
+
+
+
+        

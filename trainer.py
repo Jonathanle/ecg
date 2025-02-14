@@ -22,6 +22,9 @@ import pandas as pd
 from pathlib import Path
 
 import re
+import inspect # function used for checking code structure at runtime
+
+
 
 def preprocess_data_file(filepath):
     """
@@ -187,6 +190,8 @@ def get_patient_ids(filepaths):
 	
 	return new_patient_ids
 
+
+
 class ECGDataset(Dataset):
 	def __init__(self, data_tensor, data_patient_ids, labels):
 		"""
@@ -274,7 +279,34 @@ class ECGDataset(Dataset):
 
 		return ecg_training_tensor, label, patient_id 
 
-class ECGNet(nn.Module): # TODO: Complete but do not test + learn and understand the code later
+
+class CompositeECGDataset(Dataset):
+
+	def __init__(self, pre_dataset, post_dataset):
+		self.pre_dataset = pre_dataset
+		self.post_dataset = post_dataset
+
+
+		assert len(pre_dataset) == len(post_dataset), "Error: len of predataset not equal to post_dataset"
+		
+
+	def __len__(self): 
+		return len(self.pre_dataset)
+	def __getitem__(self, idx): 
+		"""
+		Implement a O(n) search with respect to dataset - (wont matter because the dataset size is fixed anyways)
+		"""
+		pre_tensor, labels, patient_id_pre = self.pre_dataset[idx]
+		
+		for i in range(0, len(self.post_dataset)):
+			post_tensor, _, patient_id_post = self.post_dataset[i]
+			if patient_id_post == patient_id_pre: 
+				return torch.stack((pre_tensor, post_tensor), axis=0), labels, patient_id_post	
+		
+		raise Exception(f"Error: for patient id {patient_id_pre} no id found in post dataset")
+
+
+class ECGNet(nn.Module): # TODO: Complete but do not test + learn and understand the code later (reduce entropy by learaning how the functions work
     """
     Network that performs 1d convolutions to combine informaation locally to transform information to another representation that is useful
     """
@@ -326,7 +358,7 @@ class ECGNet(nn.Module): # TODO: Complete but do not test + learn and understand
         
         # Process each lead independently
         # Reshape to process leads independently: (batch, leads, time, 1) -> (batch * leads, 1, time)
-        x = x.permute(0, 1, 3, 2).reshape(-1, 1, self.seq_length)
+        x = x.permute(0, 1, 3, 2).reshape(-1, 1, self.seq_length) # WTF did i do here?
         
         # Extract features from each lead
         x = self.lead_features(x)
@@ -341,13 +373,151 @@ class ECGNet(nn.Module): # TODO: Complete but do not test + learn and understand
         
         return x
 
+
+class TrainingConfig():
+	"""
+	Class That handles Configuration Management and Instantiation
+
+	Particular Important for handling the mapping and just the handlinlg of creation
+	we just wnat the code to just do the doing of making the model, and not having it need to define its own configuraation
+	or even validate that the configuration is useful
+
+	Then Training handles telling the functions training what to do and the "env" of training. 
+	It will validate different combinations of patient_datasets to the models.
+
+	Acts as a configuration Objective Variable for telling what to do / The ending state + encoding dataset env.
+	"""
+
+	def __init__(self, dataset = ECGDataset, model = ECGNet): 
+		"""
+		Initialize Parameters
+
+		Args: 
+			ECGDataset (Dataset Class) - name of the class to instantiate
+			
+		"""	
+		
+		self.num_epochs = 100
+		self.patience = 10 # this is something thaat one defines what do to 
+		
+
+		self.dataset_model_configurations = {(ECGDataset, ECGNet)} # Add more valid Dataset, Model Configurations as needed (this is manually added knowledge by me)
+
+		self.dataset = ECGDataset
+		self.model = ECGNet
+
+		self.validate_dataset_model_config(self.dataset, self.model) # always use called in functions to emphasize existence watch out for hidden inputs from class
+
+
+		self.use_post = True
+
+		class_weights = torch.Tensor([0.8])#.to(device) removed to becauase .to is a device specific function)
+		criterion = torch.nn.BCELoss(weight=class_weights)  
+		self.lr = 0.001
+
+		# optimizer has an instantiation dependency to make model --> when creating model i can then create optimizer
+		self.optimizer_class = torch.optim.Adam #(model.parameters(), lr=self.lr) # TODO: instantiate Adam when model is instantiated
+		self.optimizer = None
+	
+		# Dataloader configurations
+		self.batch_size = 32
+		self.n_workers = 0 	
+
+
+		# CV Configurations
+		self.n_splits = 5
+
+		self.device = 'cuda:0'
+	def validate_dataset_interface(self):
+		"""
+		Heuristic Check on idx 0 that the number of elements is 3 and fulfills properties of data
+
+		Requirements checked: 
+			1. data must be a Pytorch Tensor
+			2. labels must be Pytorch and Binary Integer Outcome
+			3. Last must be a string of the form RXX
+
+		Create Dataset? 
+		# no i want to check the function signature and the return
+		"""
+			
+		#sig = inspect.signature(self.dataset.__getitem__)
+		# TODO: Implement Validation Interface for faster type checking	
+			
+		return
+	def validate_dataset_model_config(self, dataset, model):
+		"""
+		Training Config Checks to see if the Dataset is good before telling what to do.
+		Checks if the configuration is consistent and found in the valid configurations
+		"""
+		return (dataset, model) in self.dataset_model_configurations
+	
+	def get_dataset(self):
+		"""
+		Given dataset object, retrieve a dataset object inside 
+		
+		Use another interface for creaing - this might be premature optimization
+		"""	
+		
+				
+		ecg_tensors_pre, filepaths_pre = preprocess_directory(get_post=False)
+	
+		ecg_tensors_post, filepaths_post = preprocess_directory(get_post=True) # Are these deterministic the filepaths? 
+
+		training_data_file_ids_pre = get_patient_ids(filepaths_pre)# helper fucntion due to dependency on tests restricting interface change
+		training_data_file_ids_post = get_patient_ids(filepaths_post)
+		# if this world were mine 
+		
+		labels = preprocess_patient_labels() 
+
+		# Create all objects 
+		dataset_pre = ECGDataset(ecg_tensors_pre, training_data_file_ids_pre, labels)
+		dataset_post = ECGDataset(ecg_tensors_post, training_data_file_ids_post, labels)
+		dataset_composite = CompositeECGDataset(dataset_pre, dataset_post)	
+	
+		return_mapping = {(ECGDataset, False): dataset_pre, (ECGDataset, True): dataset_post, (CompositeECGDataset, True): dataset_composite, (CompositeECGDataset, False): dataset_composite}
+
+		# filenames are weird --> remove to get only the patient information
+		labels = preprocess_patient_labels() 
+		
+		return return_mapping[(self.dataset, self.use_post)]
+
+	def retrieve_training_model(self): 
+		"""
+		Returns a dictionary containing 4 attributes for training based off of the training config
+		"""
+
+		model = self.model()
+		self.optimizer = self.optimizer_class(model.parameters(), lr=self.lr)
+
+		return model
+	def generate_dataloader(self, dataset, split): 
+		"""
+		Generates a dataloader that from indices - (should the indices here be inputted into the function? how does Dataset relate to Config? Should it be controling dataset or fed? 
+		"""
+		dataloader = DataLoader(dataset, 
+			batch_size=self.batch_size, 
+			sampler=SubsetRandomSampler(split), # notice here that the train variable greatly simplifies the approach (pseudo discovery based)
+			num_workers=0
+		)
+
+		return dataloader # TODO: Test Dataloader for equivalence cases
+	
 def train_epoch(model, train_loader, criterion, optimizer, device):
+    """
+    Train one epoch - DFD does the model have to know about the configuration of the dataset? 
+    Yes - It has to know specifically that any* dataset must be a tuple 
+    - LT probably wasnt the best option for a dataset interface, but next time i can do that. change to dict?
+    - well nothing changes, like there is always data, there is always labels, there is always IDs, 
+   -> therefore any dataset MUST output a 3-tuple. 
+	
+    """
     model.train()
     running_loss = 0.0
     predictions = []
     true_labels = []
     
-    for data, labels, _ in train_loader:
+    for data, labels, _ in train_loader: # training config here has to validate so this fxn can no t worry
         data, labels = data.to(device), labels.to(device)
         labels = labels.float().to(device)  # Convert to float for BCE loss note for later + add to device
         
@@ -414,11 +584,11 @@ def train_model(model, optimizer, criterion, train_loader, val_loader, device, s
 	
 
 	"""
-	# TODO: Refactor into a Main Config Class
-	num_epochs = 100
+	# TODO: Refactor into a Main Config Class #TrainConfig
+	num_epochs = 100 
 	best_val_auc = 0
 	best_model_state = None
-	patience = 10
+	patience = 10 # this is something thaat one defines what do to 
 	patience_counter = 0
 	# load model parameters for validation 
 
@@ -477,7 +647,8 @@ def create_data_splits(dataset, n_splits=5, val_size=0.2):
     """
     Create train/val/test splits that can be extended to k-fold CV.
     Initially uses only one fold but structured for easy k-fold extension.
-    
+	
+    For dataset only requires informataion about dataset's size AND binary outcome to have equal distribution   
     Args:
         dataset: ECGDataset instance
         n_splits: Number of folds (default=5)
@@ -521,35 +692,22 @@ def create_data_splits(dataset, n_splits=5, val_size=0.2):
         data_splits.append(data_split)
     return data_splits
 
-def do_cross_fold_validation():
+def do_cross_fold_get_results(dataset):
 	"""
 	Function that Trains Model on Different Folds of Dataset, returning the Best AUC for each fold. 
-Params:
+
+
+	Params:
+		dataset (torch.Dataset??) - Pytorch Dataset for training ECG
+
+
+	Returns: 
+		best_aucs (list): list of aucs for each fold created
 	"""
-
-	return
-
-
-def main():
-	assert torch.cuda.is_available(), "Error: CUDA required to run trainer.py"
-
-
-	ecg_tensors, filepaths = preprocess_directory(get_post=True)
-	
-	training_data_file_ids = get_patient_ids(filepaths)# helper fucntion due to dependency
-	
-	# filenames are weird --> remove to get only the patient information
-	labels = preprocess_patient_labels() # change to a dictionary
-
-	
-	dataset = ECGDataset(ecg_tensors, training_data_file_ids, labels)
-
-	
 
 	best_aucs = []	
 	
-	# what exactly does this do? 
-	splits = create_data_splits(dataset, n_splits=5) # strategy - using pointers for spllits is much more useful than actually splitting
+	splits = create_data_splits(dataset, n_splits=5) # #copied
 	
 	for split in splits: 
 
@@ -567,24 +725,46 @@ def main():
 		)
 		test_loader = DataLoader(
 			dataset, 
-			batch_size=32,
+			batch_size=32, # #copied
 			sampler=SubsetRandomSampler(split['test']),
 			num_workers=0
 		)
+		# #copied
+		device = 'cuda:0' # torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-		device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-		# TODO: Refactor these into a main config file
+		# DONE #copied
 		model = ECGNet().to(device)
 		class_weights = torch.Tensor([0.8]).to(device)
 		criterion = torch.nn.BCELoss(weight=class_weights)  
 		optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-		best_auc = train_model(model, optimizer, criterion, train_loader, val_loader, device, save_model=False) # TODO SB / Consider Adding the goal of setting save model to false
+		best_auc = train_model(model, optimizer, criterion, train_loader, val_loader, device, save_model=False)
 
 		best_aucs.append(best_auc)
 
+
+	return best_aucs
+
+
+def main():
+	assert torch.cuda.is_available(), "Error: CUDA required to run trainer.py"
+
+	ecg_tensors, filepaths = preprocess_directory(get_post=True)
+	training_data_file_ids = get_patient_ids(filepaths)# helper fucntion due to dependency on tests restricting interface change
+	
+
+	# (delete ths later ) TODO: Implement the post as basically another channel? then no need for model to change just add another channel? 
+
+
+	# filenames are weird --> remove to get only the patient information
+	labels = preprocess_patient_labels() 
+
+	# #copied	
+	dataset = ECGDataset(ecg_tensors, training_data_file_ids, labels)
+	
+	best_aucs = do_cross_fold_get_results(dataset)
+
 	breakpoint()
-	# here i end up getting the best val AUC for the
+
 if __name__ == '__main__':
     main()

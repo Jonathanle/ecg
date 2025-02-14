@@ -25,9 +25,9 @@ def patient_excel_static():
     
     return data_tensor, file_paths
 
-@pytest.fixture(scope='function')
+@pytest.fixture(scope='module')
 def ecg_dataset_fixture(patient_excel_static): # fine to have function scope?
-    ecg_tensors, filepaths = preprocess_directory()
+    ecg_tensors, filepaths = preprocess_directory(get_post=False)
 
     training_data_file_ids = get_patient_ids(filepaths)
 
@@ -36,6 +36,21 @@ def ecg_dataset_fixture(patient_excel_static): # fine to have function scope?
     dataset = ECGDataset(ecg_tensors, training_data_file_ids, labels)
 
     return dataset
+@pytest.fixture(scope='module')
+def ecg_dataset_fixture_pre():
+
+    ecg_tensors, filepaths = preprocess_directory(get_post=False)
+
+    training_data_file_ids = get_patient_ids(filepaths)
+
+    labels = preprocess_patient_labels()
+
+    dataset = ECGDataset(ecg_tensors, training_data_file_ids, labels)
+
+    return dataset
+
+
+
 @pytest.fixture(scope='function')
 def sample_excel(tmppath = "./data/misc"): 
     """Create a temporary Excel file with sample data."""
@@ -304,7 +319,17 @@ def test_ECG_dataset_training_data_correct_shape(ecg_dataset_fixture): # framewo
     assert matches is not None
      
 
+def test_ECG_composite_dataset(ecg_dataset_fixture_pre, ecg_dataset_fixture):
+    """
+    Acceptable state one goes through is shape and patient id property which are both needed
+    """
+    dataset = CompositeECGDataset(ecg_dataset_fixture_pre, ecg_dataset_fixture)
     
+    for i in range(0, len(dataset)):
+        tensor, label, patient_id = dataset[0]
+        assert patient_id == ecg_dataset_fixture_pre[0][2]
+        assert tensor.shape == torch.Size([2, 250, 12, 1]) # NOTE: this testing function is hard coded for specific implementation of the siz
+
 
 
 if __name__ == '__main__':
