@@ -394,15 +394,13 @@ class TrainingConfig():
 
 		Args: 
 			ECGDataset (Dataset Class) - name of the class to instantiate
-			
-		"""	
-		
+
+		"""			
 		self.num_epochs = 100
 		self.patience = 10 # this is something thaat one defines what do to 
 		
 
 		self.dataset_model_configurations = {(ECGDataset, ECGNet)} # Add more valid Dataset, Model Configurations as needed (this is manually added knowledge by me)
-
 		self.dataset = ECGDataset
 		self.model = ECGNet
 
@@ -410,9 +408,8 @@ class TrainingConfig():
 
 
 		self.use_post = True
-
-		class_weights = torch.Tensor([0.8])#.to(device) removed to becauase .to is a device specific function)
-		criterion = torch.nn.BCELoss(weight=class_weights)  
+		self.class_weights = torch.Tensor([0.8])#.to(device) removed to becauase .to is a device specific function)
+		self.criterion = torch.nn.BCELoss(weight=self.class_weights)  
 		self.lr = 0.001
 
 		# optimizer has an instantiation dependency to make model --> when creating model i can then create optimizer
@@ -482,7 +479,7 @@ class TrainingConfig():
 		
 		return return_mapping[(self.dataset, self.use_post)]
 
-	def retrieve_training_model(self): 
+	def generate_model(self): 
 		"""
 		Returns a dictionary containing 4 attributes for training based off of the training config
 		"""
@@ -503,7 +500,7 @@ class TrainingConfig():
 
 		return dataloader # TODO: Test Dataloader for equivalence cases
 	
-def train_epoch(model, train_loader, criterion, optimizer, device):
+def train_epoch(training_config, model, train_loader, criterion, optimizer, device):
     """
     Train one epoch - DFD does the model have to know about the configuration of the dataset? 
     Yes - It has to know specifically that any* dataset must be a tuple 
@@ -562,7 +559,7 @@ def validate(model, val_loader, criterion, device):
     
     return val_loss, val_auc
 
-def train_model(model, optimizer, criterion, train_loader, val_loader, device, save_model=True):
+def train_model(training_config, model, optimizer, criterion, train_loader, val_loader, device, save_model=True):
 	"""
 	Train a Model To optize towards parameters
 
@@ -585,16 +582,17 @@ def train_model(model, optimizer, criterion, train_loader, val_loader, device, s
 
 	"""
 	# TODO: Refactor into a Main Config Class #TrainConfig
-	num_epochs = 100 
+	num_epochs = training_config.num_epochs 
 	best_val_auc = 0
 	best_model_state = None
-	patience = 10 # this is something thaat one defines what do to 
+	patience = training_config.patience# this is something thaat one defines what do to 
 	patience_counter = 0
 	# load model parameters for validation 
 
 	for epoch in range(num_epochs):
 		# Train
 		train_loss, train_auc = train_epoch( 
+		    training_config,
 		    model=model,
 		    train_loader=train_loader,
 		    criterion=criterion,
@@ -692,7 +690,7 @@ def create_data_splits(dataset, n_splits=5, val_size=0.2):
         data_splits.append(data_split)
     return data_splits
 
-def do_cross_fold_get_results(dataset):
+def do_cross_fold_get_results(training_config, dataset):
 	"""
 	Function that Trains Model on Different Folds of Dataset, returning the Best AUC for each fold. 
 
@@ -710,35 +708,24 @@ def do_cross_fold_get_results(dataset):
 	splits = create_data_splits(dataset, n_splits=5) # #copied
 	
 	for split in splits: 
+		train_loader = training_config.generate_dataloader(dataset, split['train'])
+		val_loader = training_config.generate_dataloader(dataset, split['val'])
+		test_loader = training_config.generate_dataloader(dataset, split['test'])
 
-		# this is good but needed to be made for every split
-		train_loader = DataLoader(dataset, 
-			batch_size=32, 
-			sampler=SubsetRandomSampler(split['train']), # notice here that the train variable greatly simplifies the approach (pseudo discovery based)
-			num_workers=0
-		)
-		val_loader = DataLoader(
-			dataset, 
-			batch_size=32,
-			sampler=SubsetRandomSampler(split['val']),
-			num_workers=0
-		)
-		test_loader = DataLoader(
-			dataset, 
-			batch_size=32, # #copied
-			sampler=SubsetRandomSampler(split['test']),
-			num_workers=0
-		)
-		# #copied
-		device = 'cuda:0' # torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+		
+		device = training_config.device
 
 		# DONE #copied
-		model = ECGNet().to(device)
-		class_weights = torch.Tensor([0.8]).to(device)
-		criterion = torch.nn.BCELoss(weight=class_weights)  
-		optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+		model = training_config.generate_model().to(device)
 
-		best_auc = train_model(model, optimizer, criterion, train_loader, val_loader, device, save_model=False)
+
+		class_weights = training_config.class_weights.to(device)#torch.Tensor([0.8]).to(device)
+		criterion = training_config.criterion.to(device) # torch.nn.BCELoss(weight=class_weights)  
+		# NOTE: From training config, getting optimizer always has dependency w/ model instaantiation
+		optimizer = training_config.optimizer #torch.optim.Adam(model.parameters(), lr=0.001)
+
+
+		best_auc = train_model(training_config, model, optimizer, criterion, train_loader, val_loader, device, save_model=False)
 
 		best_aucs.append(best_auc)
 
@@ -749,20 +736,12 @@ def do_cross_fold_get_results(dataset):
 def main():
 	assert torch.cuda.is_available(), "Error: CUDA required to run trainer.py"
 
-	ecg_tensors, filepaths = preprocess_directory(get_post=True)
-	training_data_file_ids = get_patient_ids(filepaths)# helper fucntion due to dependency on tests restricting interface change
-	
+	training_config = TrainingConfig()
 
-	# (delete ths later ) TODO: Implement the post as basically another channel? then no need for model to change just add another channel? 
+	dataset = training_config.get_dataset()
 
 
-	# filenames are weird --> remove to get only the patient information
-	labels = preprocess_patient_labels() 
-
-	# #copied	
-	dataset = ECGDataset(ecg_tensors, training_data_file_ids, labels)
-	
-	best_aucs = do_cross_fold_get_results(dataset)
+	best_aucs = do_cross_fold_get_results(training_config, dataset)
 
 	breakpoint()
 

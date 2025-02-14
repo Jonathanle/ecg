@@ -156,7 +156,7 @@ def test_CV_split_equal_split(patient_dataset):
         assert total_len == patient_dataset_len
 def test_TrainingConfig_can_genereate_model(training_config):
         
-    model = training_config.retrieve_training_model()
+    model = training_config.generate_model()
     assert isinstance(model, ECGNet)
 def test_TrainingConfig_can_generate_dataset(training_config):
         
