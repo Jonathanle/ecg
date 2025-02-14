@@ -280,7 +280,7 @@ class ECGDataset(Dataset):
 		return ecg_training_tensor, label, patient_id 
 
 
-class CompositeECGDataset(Dataset):
+class ECGCompositeDataset(Dataset):
 
 	def __init__(self, pre_dataset, post_dataset):
 		self.pre_dataset = pre_dataset
@@ -352,8 +352,8 @@ class ECGNet(nn.Module): # TODO: Complete but do not test + learn and understand
         )
         
         self.sigmoid = nn.Sigmoid()
+    def encode_leads(self, x): 
 
-    def forward(self, x):
         batch_size = x.shape[0]
         
         # Process each lead independently
@@ -361,18 +361,112 @@ class ECGNet(nn.Module): # TODO: Complete but do not test + learn and understand
         x = x.permute(0, 1, 3, 2).reshape(-1, 1, self.seq_length) # WTF did i do here?
         
         # Extract features from each lead
-        x = self.lead_features(x)
+        x = self.lead_features(x) # Hard to represent these idea formallly how would i define something of "good representation" as good? 
         
         # Reshape to combine lead features
-        x = x.reshape(batch_size, self.num_leads, -1)
+        x = x.reshape(batch_size, self.num_leads, -1) # TODO: having better models to then better approximate and explain known empirical experiences -> creating computational graphs
         x = x.reshape(batch_size, -1)  # Flatten for fully connected layers
-        
+        return x
+
+    def forward(self, x):
+        x = self.encode_leads(x) 
         # Combine features from all leads
         x = self.combine_leads(x)
         x = self.sigmoid(x)
         
         return x
 
+class ECGCompositeNet(nn.Module):
+	def __init__(self, num_leads=12, seq_length=250):
+
+		super(ECGCompositeNet, self).__init__()
+
+
+		self.ecg_net_pre = ECGNet(num_leads=num_leads, seq_length=seq_length)
+		self.ecg_net_post = ECGNet(num_leads=num_leads, seq_length=seq_length)
+
+		
+		self.combine_leads_pre = nn.Sequential(
+		    nn.Linear(128 * self.ecg_net_pre.feature_length * self.ecg_net_pre.num_leads, 256),
+		    nn.ReLU(),
+		    nn.Dropout(0.5),
+		    nn.Linear(256, 64),
+		    nn.ReLU(),
+		    nn.Dropout(0.3),
+		    nn.Linear(64, 32)
+		)
+		
+		self.combine_leads_post = nn.Sequential(
+		    nn.Linear(128 * self.ecg_net_post.feature_length * self.ecg_net_post.num_leads, 256),
+		    nn.ReLU(),
+		    nn.Dropout(0.5),
+		    nn.Linear(256, 64),
+		    nn.ReLU(),
+		    nn.Dropout(0.3),
+		    nn.Linear(64, 32)
+		)
+		# TODO: Create computation combining the leads
+
+		self.eval_head = nn.Linear(64, 1)
+		self.sigmoid = nn.Sigmoid()
+
+	def forward(self, x):
+		# Manually tested TODO if necessary formalize the behavior later if changing
+
+
+		x_pre_input = x[:, 0, :, :, :].squeeze(1)
+		x_post_input = x[:, 1, :, :, :].squeeze(1)
+		
+		x_pre = self.ecg_net_pre.encode_leads(x_pre_input) # need to feed in batch size assumed the first dimension is the batch size
+		x_post = self.ecg_net_post.encode_leads(x_post_input)
+
+
+		x_pre = self.combine_leads_pre(x_pre)
+		x_post = self.combine_leads_post(x_post)
+
+		x_combined = torch.cat((x_pre, x_post), dim=1)  #torch.stack((x_pre, x_post), axis=0).flatten?  # what am i missing here
+		output_logit = self.eval_head(x_combined)
+		
+		prob_output = self.sigmoid(output_logit)
+
+		return prob_output 
+		
+		# TODO: Provide better representations using the "1d array" stride subjective interpretation framework striding nonsequntially === striding seq on a reshaped arr
+		# describing a range intuitively === striding to that spot - then iterating over that stride dimension easily.
+def train_epoch(training_config, model, train_loader, criterion, optimizer, device):
+    """
+    Train one epoch - DFD does the model have to know about the configuration of the dataset? 
+    Yes - It has to know specifically that any* dataset must be a tuple 
+    - LT probably wasnt the best option for a dataset interface, but next time i can do that. change to dict?
+    - well nothing changes, like there is always data, there is always labels, there is always IDs, 
+   -> therefore any dataset MUST output a 3-tuple. 
+	
+    """
+    model.train()
+    running_loss = 0.0
+    predictions = []
+    true_labels = []
+    
+    for data, labels, _ in train_loader: # training config here has to validate so this fxn can no t worry
+        data, labels = data.to(device), labels.to(device)
+        labels = labels.float().to(device)  # Convert to float for BCE loss note for later + add to device
+        
+        optimizer.zero_grad()
+        outputs = model(data) # TODO: verify with testing that the outputs are inside the gpu not cpu (need a bottleneck flow showing the data *in* specific spots
+		
+
+        loss = criterion(outputs, labels) # TODO: analyze and formalize behavior of test in this in the test what exactly need the inputs to be? )
+        loss.backward()
+        optimizer.step()
+        
+        running_loss += loss.item()
+        predictions.extend(outputs.detach().cpu().numpy())
+        true_labels.extend(labels.cpu().numpy())
+    
+    epoch_loss = running_loss / len(train_loader)
+    epoch_auc = roc_auc_score(true_labels, predictions)
+    
+    return epoch_loss, epoch_auc
 
 class TrainingConfig():
 	"""
@@ -397,12 +491,19 @@ class TrainingConfig():
 
 		"""			
 		self.num_epochs = 100
-		self.patience = 10 # this is something thaat one defines what do to 
+		self.patience = 10 
 		
 
-		self.dataset_model_configurations = {(ECGDataset, ECGNet)} # Add more valid Dataset, Model Configurations as needed (this is manually added knowledge by me)
-		self.dataset = ECGDataset
-		self.model = ECGNet
+		self.dataset_model_configurations = {(ECGDataset, ECGNet), (ECGCompositeDataset, ECGCompositeNet)} # Add more valid Dataset, Model Configurations as needed (this is manually added knowledge by me)
+
+		
+		self.dataset = dataset# why are these models in params vs inside?
+		self.model = model 
+
+		# Validation check for dataset and model to be *types* and not classes
+		assert isinstance(self.dataset, type) # classes are "type" NOT the clas
+		assert isinstance(self.model, type)
+		
 
 		self.validate_dataset_model_config(self.dataset, self.model) # always use called in functions to emphasize existence watch out for hidden inputs from class
 
@@ -452,13 +553,19 @@ class TrainingConfig():
 	def get_dataset(self):
 		"""
 		Given dataset object, retrieve a dataset object inside 
-		
 		Use another interface for creaing - this might be premature optimization
+		# Problem in an OOP class all the variables are very hidden adn the nature of dependencies is not emphasized (feels like i could catch the other varible heuristically)
+
+		Params (Implicit): 
+			self.post (boolean) - boolean must be either true or false
+
+		NOTE:
+		Instead of laambdaa - the "params" is the environment" - then here instead of needing to ass it in, i just need to validaate
+		that the environment is valoid (nothing given to me, but I still use the env as a function i validate i have all the right paths
 		"""	
 		
 				
 		ecg_tensors_pre, filepaths_pre = preprocess_directory(get_post=False)
-	
 		ecg_tensors_post, filepaths_post = preprocess_directory(get_post=True) # Are these deterministic the filepaths? 
 
 		training_data_file_ids_pre = get_patient_ids(filepaths_pre)# helper fucntion due to dependency on tests restricting interface change
@@ -470,9 +577,9 @@ class TrainingConfig():
 		# Create all objects 
 		dataset_pre = ECGDataset(ecg_tensors_pre, training_data_file_ids_pre, labels)
 		dataset_post = ECGDataset(ecg_tensors_post, training_data_file_ids_post, labels)
-		dataset_composite = CompositeECGDataset(dataset_pre, dataset_post)	
+		dataset_composite = ECGCompositeDataset(dataset_pre, dataset_post)	
 	
-		return_mapping = {(ECGDataset, False): dataset_pre, (ECGDataset, True): dataset_post, (CompositeECGDataset, True): dataset_composite, (CompositeECGDataset, False): dataset_composite}
+		return_mapping = {(ECGDataset, False): dataset_pre, (ECGDataset, True): dataset_post, (ECGCompositeDataset, True): dataset_composite, (ECGCompositeDataset, False): dataset_composite}
 
 		# filenames are weird --> remove to get only the patient information
 		labels = preprocess_patient_labels() 
@@ -500,41 +607,6 @@ class TrainingConfig():
 
 		return dataloader # TODO: Test Dataloader for equivalence cases
 	
-def train_epoch(training_config, model, train_loader, criterion, optimizer, device):
-    """
-    Train one epoch - DFD does the model have to know about the configuration of the dataset? 
-    Yes - It has to know specifically that any* dataset must be a tuple 
-    - LT probably wasnt the best option for a dataset interface, but next time i can do that. change to dict?
-    - well nothing changes, like there is always data, there is always labels, there is always IDs, 
-   -> therefore any dataset MUST output a 3-tuple. 
-	
-    """
-    model.train()
-    running_loss = 0.0
-    predictions = []
-    true_labels = []
-    
-    for data, labels, _ in train_loader: # training config here has to validate so this fxn can no t worry
-        data, labels = data.to(device), labels.to(device)
-        labels = labels.float().to(device)  # Convert to float for BCE loss note for later + add to device
-        
-        optimizer.zero_grad()
-        outputs = model(data) # TODO: verify with testing that the outputs are inside the gpu not cpu (need a bottleneck flow showing the data *in* specific spots
-		
-
-        loss = criterion(outputs, labels) # TODO: analyze and formalize behavior of test in this in the test what exactly need the inputs to be? )
-        loss.backward()
-        optimizer.step()
-        
-        running_loss += loss.item()
-        predictions.extend(outputs.detach().cpu().numpy())
-        true_labels.extend(labels.cpu().numpy())
-    
-    epoch_loss = running_loss / len(train_loader)
-    epoch_auc = roc_auc_score(true_labels, predictions)
-    
-    return epoch_loss, epoch_auc
-
 
 def validate(model, val_loader, criterion, device):
     model.eval()
@@ -708,25 +780,19 @@ def do_cross_fold_get_results(training_config, dataset):
 	splits = create_data_splits(dataset, n_splits=5) # #copied
 	
 	for split in splits: 
+
 		train_loader = training_config.generate_dataloader(dataset, split['train'])
 		val_loader = training_config.generate_dataloader(dataset, split['val'])
 		test_loader = training_config.generate_dataloader(dataset, split['test'])
 
-		
 		device = training_config.device
-
-		# DONE #copied
 		model = training_config.generate_model().to(device)
-
-
-		class_weights = training_config.class_weights.to(device)#torch.Tensor([0.8]).to(device)
-		criterion = training_config.criterion.to(device) # torch.nn.BCELoss(weight=class_weights)  
-		# NOTE: From training config, getting optimizer always has dependency w/ model instaantiation
-		optimizer = training_config.optimizer #torch.optim.Adam(model.parameters(), lr=0.001)
+		class_weights = training_config.class_weights.to(device)
+		criterion = training_config.criterion.to(device) 
+		optimizer = training_config.optimizer 
 
 
 		best_auc = train_model(training_config, model, optimizer, criterion, train_loader, val_loader, device, save_model=False)
-
 		best_aucs.append(best_auc)
 
 
@@ -736,7 +802,7 @@ def do_cross_fold_get_results(training_config, dataset):
 def main():
 	assert torch.cuda.is_available(), "Error: CUDA required to run trainer.py"
 
-	training_config = TrainingConfig()
+	training_config = TrainingConfig(dataset=ECGCompositeDataset, model=ECGCompositeNet)
 
 	dataset = training_config.get_dataset()
 

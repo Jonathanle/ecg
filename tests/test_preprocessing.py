@@ -323,7 +323,8 @@ def test_ECG_composite_dataset(ecg_dataset_fixture_pre, ecg_dataset_fixture):
     """
     Acceptable state one goes through is shape and patient id property which are both needed
     """
-    dataset = CompositeECGDataset(ecg_dataset_fixture_pre, ecg_dataset_fixture)
+    # dependency required knowledg
+    dataset = ECGCompositeDataset(ecg_dataset_fixture_pre, ecg_dataset_fixture)
     
     for i in range(0, len(dataset)):
         tensor, label, patient_id = dataset[0]

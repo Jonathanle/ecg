@@ -36,8 +36,10 @@ def model():
 
 @pytest.fixture(scope='module')
 def training_config(patient_dataset, model):    
-    
-    train_config = TrainingConfig(model=model, dataset=patient_dataset)  
+   
+
+    # Error differentiate between the Class and the instance this is the *instance*
+    train_config = TrainingConfig(model=model.__class__, dataset=patient_dataset.__class__)  
     return train_config
 
 def test_cuda_is_available():
@@ -177,6 +179,12 @@ def test_TrainingConfig_can_generate_dataloader(training_config):
 
 
 
+def test_composite_net()
+    """
+    Test What???
+    """
+
+    assert True
 
 
         
