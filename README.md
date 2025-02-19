@@ -15,7 +15,7 @@
 
 
 ### Build environment (Given an dockerfile for running)
-docker build -t ecg_1 .
+[sudo] docker build -t ecg_1 .
 
 
 
