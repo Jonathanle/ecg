@@ -1,6 +1,13 @@
 # ecg
 
 
+- implement 2d version of the CNNs for the specifci dataaset by experimenting with 2d convolultions
+-   - with the pre and post - associate these states or objectives with segmentations of the empirical objective space
+- evaluate approaches for how I can implement interpreability
+
+- 
+
+
 
 
 ## Development Specific Ideaas on Building
