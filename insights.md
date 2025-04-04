@@ -1,4 +1,7 @@
 
+# TODO: Create an interpretability mechanism for helping to identify what the ECG was looking at for an interpolatedQRS dataset 
+
+
 
 
 # Objectives
@@ -46,6 +49,7 @@ docker run -gpus all -v ${PWD}:/app -it ecg_1 bash
 
 [pytest]
 pythonpath = . 
+
 Important whe running pytest from the directory need to have pytest ini. 
 When runnning the files tells the test files to run as if we are in the project directory. 
 
@@ -105,3 +109,13 @@ fllow from computer to learn + using the word document.
 nightmarkes of phds solutions -> create
 - I need to then knoww and see the probelm space; then i need to then define the objectives and see if it is even worthy. (Evaluate) 
 
+
+
+
+
+# 4/2 How do I change the ECG DAtaset so that I can adapt towards the preprocessing code? 
+
+In the trainer file, it seems asa though I end up using the dataset, object. This get_dataset object is importnat because it helps me return the dataset that I need in order to make it, but it seems as though it is very dependent on the fact that I have a "pre" and a "post". It seems too hard to change, maybe it seems to point to the fact that II should just create an adapter that allows on the outside to have a new format --> much more useful, i can just adapt the code, and then stil use the very useful code, less heavy than just editing the structure
+
+
+# Here, because I have a lot of data, the next logical progression is a formalization of a preprocessing pipeline for any kind of dataset; here i am just using the adapter to stay very flexible.

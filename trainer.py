@@ -16,14 +16,16 @@ import torch.nn.functional as F
 from torch.optim import Adam
 # import torch.nn.functional as F
 
-import numpy as np
 
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, accuracy_score
+
+import numpy as np
+
+
 
 import pandas as pd
 from pathlib import Path
-
 import re
 import inspect # function used for checking code structure at runtime
 
@@ -115,7 +117,69 @@ def preprocess_directory(input_dir="./data/InterpolatedQRS/", get_post=False):
 
     return combined_array, file_path_arrays
 
-def preprocess_patient_labels(input_dir="./data/PatientCohort_ECG.xlsx"): 
+
+
+def preprocess_disease_labels(input_dir, class1=None, class2=None, header=0):
+    """
+    Function that processes the disease labels, returning a dictionary mapping patient IDs
+    to binary labels for a classification task between two specified disease classes.
+
+    Only includes patients that have a positive label for either class1 or class2 (or both).
+    Patients with 0 in both class1 and class2 columns are excluded.
+        
+    This fucntion knows specifically that id columsn are integers, not with standard R 
+
+    Params:
+        input_dir (str): Path to the Excel file containing disease data
+        class1 (str): First disease class column name ('GEN', 'MYO', or 'SARC')
+        class2 (str): Second disease class column name ('GEN', 'MYO', or 'SARC')
+        header (int): Row index to use as column headers (default 0)
+        
+    Returns:
+        dict[str, int]: Dictionary with patient IDs as keys and binary labels as values
+                        1 if patient has class1, 0 if patient has class2
+    """
+    # Validate class inputs
+    valid_classes = ['GEN', 'MYO', 'SARC']
+    if class1 not in valid_classes or class2 not in valid_classes:
+        raise ValueError(f"Both class1 and class2 must be one of {valid_classes}")
+    if class1 == class2:
+        raise ValueError("class1 and class2 must be different")
+
+    # Read the Excel file
+    df = pd.read_excel(input_dir, header=header)
+
+    # Create an empty dictionary for the mapping
+    label_dict = {}
+
+    # Process each row in the dataframe
+    for _, row in df.iterrows():
+        patient_id = str(row['ID'])
+        patient_id = "R" + patient_id
+        
+        # Check if patient has either class1 or class2
+        has_class1 = row[class1] == 1
+        has_class2 = row[class2] == 1
+        
+        # Skip patients that don't have either disease
+        if not has_class1 and not has_class2:
+            continue
+            
+        # For patients with class1, assign label 1
+        # For patients with only class2, assign label 0
+        # If a patient has both, prioritize class1
+        if has_class1:
+            label_dict[patient_id] = 1
+        else:
+            label_dict[patient_id] = 0
+            
+    return label_dict
+def preprocess_patient_labels(input_dir): # removed the input_dir because I thought that here, i remove requirements of any knowledge that hides bugs, this must* always have a dependency on the input it inputs 
+    
+    labels = preprocess_disease_labels(input_dir, class1="GEN", class2="MYO")
+
+    return labels
+def preprocess_patient_labels_old(input_dir="./data/PatientCohort_ECG.xlsx"): 
     """
     Function that processes the patient labels, returning a dictionary mapping of the patients IDs to the 'Binary Response' column
     Patient IDs that are not of the form "RX" or "RXX" or "RXX" are discarded if R?? has non digits it is also rejected
@@ -132,7 +196,7 @@ def preprocess_patient_labels(input_dir="./data/PatientCohort_ECG.xlsx"):
     """ 
     VALUE_COLUMN= 'Binary Response'
 
-    df = pd.read_excel("./data/PatientCohort_ECG.xlsx", header=0, index_col=0)
+    df = pd.read_excel(input_dir, header=0, index_col=0)
     
     dict_mapping = df[VALUE_COLUMN].to_dict() 
 
@@ -741,7 +805,14 @@ def train_epoch(training_config, model, train_loader, criterion, optimizer, devi
     epoch_loss = running_loss / len(train_loader)
     epoch_auc = roc_auc_score(true_labels, predictions)
     
-    return epoch_loss, epoch_auc
+    true_labels = np.array(true_labels)
+    predictions = np.array(predictions)
+    
+    THRESHOLD = 0.5
+    predictions_binary = (predictions >= THRESHOLD).astype(float)
+    epoch_accuracy = accuracy_score(true_labels, predictions_binary)
+    
+    return epoch_loss, epoch_auc, epoch_accuracy
 
 class TrainingConfig():
     """
@@ -801,30 +872,37 @@ class TrainingConfig():
         """
         return (dataset, model) in self.dataset_model_configurations
     
-    def get_dataset(self):
+    def get_dataset(self, data_dir, label_path): 
         """
         Given dataset object, retrieve a dataset object inside 
         Use another interface for creaing - this might be premature optimization
         # Problem in an OOP class all the variables are very hidden adn the nature of dependencies is not emphasized (feels like i could catch the other varible heuristically)
 
         Params (Implicit): 
-            self.post (boolean) - boolean must be either true or false
+            data_dir - path to the label_dir path
+            label_path - path to the labelfile
+
+        
 
         NOTE:
         Instead of laambdaa - the "params" is the environment" - then here instead of needing to ass it in, i just need to validaate
         that the environment is valoid (nothing given to me, but I still use the env as a function i validate i have all the right paths
-        """ 
+        
+        I specificaly added data_dir and label_path in this situation because of changing ECG requirement of multiple datasets to input, I needded a better interface way of allowing input of multiple files, to know explicit functional dependencies of information it needs rather than it knowing implicitly
+        """
+
+            
+ 
         
                 
-        ecg_tensors_pre, filepaths_pre = preprocess_directory(get_post=False)
-        ecg_tensors_post, filepaths_post = preprocess_directory(get_post=True) # Are these deterministic the filepaths? 
+        ecg_tensors_pre, filepaths_pre = preprocess_directory(data_dir, get_post=False)
+        ecg_tensors_post, filepaths_post = preprocess_directory(data_dir, get_post=True) # Are these deterministic the filepaths? 
 
         training_data_file_ids_pre = get_patient_ids(filepaths_pre)# helper fucntion due to dependency on tests restricting interface change
         training_data_file_ids_post = get_patient_ids(filepaths_post)
         # if this world were mine 
         
-        labels = preprocess_patient_labels() 
-
+        labels = preprocess_patient_labels(label_path)  # change these so that it aaccomondate
         # Create all objects 
         dataset_pre = ECGDataset(ecg_tensors_pre, training_data_file_ids_pre, labels)
         dataset_post = ECGDataset(ecg_tensors_post, training_data_file_ids_post, labels)
@@ -833,7 +911,7 @@ class TrainingConfig():
         return_mapping = {(ECGDataset, False): dataset_pre, (ECGDataset, True): dataset_post, (ECGCompositeDataset, True): dataset_composite, (ECGCompositeDataset, False): dataset_composite}
 
         # filenames are weird --> remove to get only the patient information
-        labels = preprocess_patient_labels() 
+        labels = preprocess_patient_labels(label_path) 
         
         return return_mapping[(self.dataset, self.use_post)]
 
@@ -880,7 +958,15 @@ def validate(model, val_loader, criterion, device):
     val_loss = running_loss / len(val_loader)
     val_auc = roc_auc_score(true_labels, predictions)
     
-    return val_loss, val_auc
+    predictions = np.array(predictions)
+    true_labels = np.array(true_labels)   
+ 
+    THRESHOLD = 0.5
+    predictions_binary = (predictions >= THRESHOLD).astype(float)
+    val_accuracy = accuracy_score(true_labels, predictions_binary)
+
+
+    return val_loss, val_auc, val_accuracy
 
 def train_model(training_config, model, optimizer, criterion, train_loader, val_loader, device, save_model=True):
     """
@@ -907,6 +993,9 @@ def train_model(training_config, model, optimizer, criterion, train_loader, val_
     # TODO: Refactor into a Main Config Class #TrainConfig
     num_epochs = training_config.num_epochs 
     best_val_auc = 0
+    associated_accuracy = 0   # given best_val_auc, store accuracy associated with it
+
+
     best_model_state = None
     patience = training_config.patience# this is something thaat one defines what do to 
     patience_counter = 0
@@ -914,7 +1003,7 @@ def train_model(training_config, model, optimizer, criterion, train_loader, val_
 
     for epoch in range(num_epochs):
         # Train
-        train_loss, train_auc = train_epoch( 
+        train_loss, train_auc, train_accuracy = train_epoch( 
             training_config,
             model=model,
             train_loader=train_loader,
@@ -923,8 +1012,8 @@ def train_model(training_config, model, optimizer, criterion, train_loader, val_
             device=device
         )
 
-        # Validate
-        val_loss, val_auc = validate(
+        # Validate - TODO: Turn this into a dictionary to be able to access + get 1 object conceptually, 
+        val_loss, val_auc, val_accuracy = validate(
             model=model,
             val_loader=val_loader,
             criterion=criterion,
@@ -932,13 +1021,14 @@ def train_model(training_config, model, optimizer, criterion, train_loader, val_
         )
 
         # Print metrics
-        print(f'Train Loss: {train_loss:.4f}, Train AUC: {train_auc:.4f}')
-        print(f'Val Loss: {val_loss:.4f}, Val AUC: {val_auc:.4f}')
+        print(f'Train Loss: {train_loss:.4f}, Train AUC: {train_auc:.4f} Train Accuracy: {train_accuracy:.4f}')
+        print(f'Val Loss: {val_loss:.4f}, Val AUC: {val_auc:.4f} Val Accuracy: {val_accuracy:.4f}')
 
     
-        # Model selection and early stopping
+        # Model selection and early stopping (based on number of times the AUC improves)
         if val_auc > best_val_auc:
             best_val_auc = val_auc
+            associated_accuracy = val_accuracy 
             best_model_state = model.state_dict().copy()
             patience_counter = 0
 
@@ -960,7 +1050,7 @@ def train_model(training_config, model, optimizer, criterion, train_loader, val_
                 print('Early stopping triggered')
                 break
 
-    return best_val_auc
+    return np.array((best_val_auc, associated_accuracy))
 
 
 
@@ -1028,7 +1118,6 @@ def do_cross_fold_get_results(training_config, dataset):
     splits = create_data_splits(dataset, n_splits=5) # #copied
     
     for split in splits: 
-
         train_loader = training_config.generate_dataloader(dataset, split['train'])
         val_loader = training_config.generate_dataloader(dataset, split['val'])
 
@@ -1045,19 +1134,41 @@ def do_cross_fold_get_results(training_config, dataset):
     # TEMPORARY- added fucntion in this space for gradcam interpretation 
     #interpret_ecg_model(model, dataset)
 
-    return best_aucs
+    return np.array(best_aucs)
 
 
 def main():
     assert torch.cuda.is_available(), "Error: CUDA required to run trainer.py"
 
-    training_config = TrainingConfig(dataset=ECGCompositeDataset, model=ECGCompositeNet)
-    dataset = training_config.get_dataset()
+    use_new_dataset = True # very useful because helps with project; it also will not be used further, I considered all optimizations especially for having higher more comprehensive pipelines, but it is not useful
+    
+    if use_new_dataset == False: 
+        data_dir="./data/InterpolatedQRS/"
+        label_path="./data/PatientCohort_ECG.xlsx"
+    else:
+        # I am required to manually preprocess all of these befor
+        data_dir="./data/InterpolatedQRS2/"
+        label_path="./data/GenCard_ECGs_Jonathan/GenCard_class_labels.xlsx"
+                    # maybe here I will just have a separate python module for specifically adapting --> this ismost useful?
 
-    # TODO: Determine if the validation set is too small? like i want to then just use 2 training sets train and val, no need to leave out test???
+    # I had this formaat because, it waas easy to work with / duplicates will not affect, as evidenced by my stable training performance 
+    training_config = TrainingConfig(dataset=ECGCompositeDataset, model=ECGCompositeNet)
+
+    #WHYIM[0]: Opened up option for including explicit filepaths, useufl because it allows me to be more explicit on what information it needs to be passed in
+    # so that it can operate at the surface (previously before i had no need but now it is useful)
+    dataset = training_config.get_dataset(data_dir=data_dir, label_path=label_path)
+    
+
+
+
+    # TODO: Determine if the validation set is too small? like i want to then just use 2 training sets train and val, no need to leave out test??? --> I want here to get global accuracy metric
     # Create a higher order narrative for interpreting what my code is doing that is consistent and 
     best_aucs = do_cross_fold_get_results(training_config, dataset)
+   
+    averages =  np.mean(best_aucs, axis=0)
+    average_auc, average_accuracy =  averages[0], averages[1]
 
+    print(f"Average AUC: {average_auc}, Average Accuracy: {average_accuracy}")
     breakpoint()
 
 if __name__ == '__main__':
